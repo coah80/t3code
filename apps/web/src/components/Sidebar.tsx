@@ -1365,7 +1365,7 @@ export default function Sidebar() {
                   return (
                     <SortableProjectItem key={project.id} projectId={project.id}>
                       {(dragHandleProps) => (
-                        <Collapsible className="group/collapsible" open={project.expanded}>
+                        <Collapsible className="group/collapsible" open={project.expanded} data-drop-zone={project.id}>
                           <div className="group/project-header relative">
                             <SidebarMenuButton
                               size="sm"

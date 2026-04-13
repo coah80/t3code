@@ -3889,6 +3889,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         )}
                       </div>
 
+                      {/* Steering indicator — shows steer/queue mode when running */}
+                      {phase === "running" && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                            title="Follow-up will steer the active run"
+                          >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>
+                            Steer
+                          </button>
+                        </div>
+                      )}
+
                       {/* Right side: send / stop button */}
                       <div
                         data-chat-composer-actions="right"

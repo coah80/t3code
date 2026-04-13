@@ -25,6 +25,9 @@ import { buildSystemPrompt } from './prompt.js';
 import { McpManager, type McpServerConfig } from '../mcp/client.js';
 import { LspManager } from '../lsp/client.js';
 import { discoverSkills, loadInstructions, getSkillToolDefinition, getSkillContent, type Skill } from '../skills/loader.js';
+import { createNudgeState, incrementTurn, shouldNudgeSkill, shouldNudgeMemory, resetSkillNudge, resetMemoryNudge, SKILL_NUDGE_MESSAGE, MEMORY_NUDGE_MESSAGE } from './skillNudge.js';
+import { spillTurnResults } from './resultSpill.js';
+import { CheckpointManager } from './checkpoint.js';
 
 export interface AgentLoopOptions {
 	readonly config: AgentConfig;
@@ -80,6 +83,8 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 
 	let turnNumber = 0;
 	const editedFiles: Set<string> = new Set();
+	let nudgeState = createNudgeState();
+	const checkpointMgr = new CheckpointManager(config.workspaceRoot);
 
 	while (turnNumber < maxTurns) {
 		if (signal?.aborted) {
@@ -222,6 +227,21 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 			}
 		}));
 
+		// ─── Checkpoint before file mutations ──────────────────────────────
+		const mutatingFiles = toolCalls
+			.filter((tc) => ['Write', 'StrReplace', 'Delete'].includes(tc.name))
+			.map((tc) => tc.arguments.path as string)
+			.filter(Boolean);
+
+		if (mutatingFiles.length > 0) {
+			try {
+				await checkpointMgr.createCheckpoint(
+					`Turn ${turnNumber}: ${mutatingFiles.map((f) => f.split('/').pop()).join(', ')}`,
+					mutatingFiles,
+				);
+			} catch { /* checkpoint is best-effort */ }
+		}
+
 		// Track edited files for auto-verification
 		for (const tc of toolCalls) {
 			if (['Write', 'StrReplace'].includes(tc.name)) {
@@ -230,8 +250,17 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 			}
 		}
 
-		// Emit tool results
-		for (const result of results) {
+		// ─── Spill large results to temp files ─────────────────────────────
+		const spilledContents = await spillTurnResults(
+			results.map((r) => ({ content: r.content, toolName: toolCalls.find((tc) => tc.id === r.tool_call_id)?.name ?? 'unknown' })),
+		);
+		const spilledResults: ToolResult[] = results.map((r, i) => ({
+			...r,
+			content: spilledContents[i] ?? r.content,
+		}));
+
+		// Emit tool results (with spilled content)
+		for (const result of spilledResults) {
 			yield { type: 'tool_call_complete', toolCallId: result.tool_call_id, result };
 		}
 
@@ -243,26 +272,37 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 			tool_calls: toolCalls,
 		});
 
-		// Tool results as separate messages (Anthropic format)
+		// Tool results as separate messages (using spilled content)
 		if (config.provider === 'anthropic') {
-			// Anthropic: all tool results in one user message
 			messages.push({
 				role: 'user',
-				content: results.map((r) => ({
+				content: spilledResults.map((r) => ({
 					type: 'tool_result' as const,
 					tool_use_id: r.tool_call_id,
 					content: r.content,
 				})),
 			});
 		} else {
-			// OpenAI: each tool result is a separate message
-			for (const result of results) {
+			for (const result of spilledResults) {
 				messages.push({
 					role: 'tool',
 					content: result.content,
 					tool_call_id: result.tool_call_id,
 				});
 			}
+		}
+
+		// ─── Nudge system — periodic skill/memory reminders ────────────────
+		nudgeState = incrementTurn(nudgeState);
+
+		if (shouldNudgeSkill(nudgeState)) {
+			messages.push({ role: 'user', content: SKILL_NUDGE_MESSAGE });
+			nudgeState = resetSkillNudge(nudgeState);
+		}
+
+		if (shouldNudgeMemory(nudgeState)) {
+			messages.push({ role: 'user', content: MEMORY_NUDGE_MESSAGE });
+			nudgeState = resetMemoryNudge(nudgeState);
 		}
 
 		const turn: AgentTurn = {
