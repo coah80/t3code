@@ -4,7 +4,7 @@
 import { promises as fs } from "fs";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
-import type { ToolDefinition } from "../types.js";
+import type { ToolDefinition } from "../types";
 
 export interface Skill {
 	readonly name: string;
@@ -21,7 +21,7 @@ function parseFrontmatter(content: string): { meta: Record<string, string>; body
 	if (!match) return { meta: {}, body: content };
 
 	const meta: Record<string, string> = {};
-	for (const line of match[1].split("\n")) {
+	for (const line of match[1]!.split("\n")) {
 		const colonIdx = line.indexOf(":");
 		if (colonIdx > 0) {
 			const key = line.slice(0, colonIdx).trim();
@@ -30,7 +30,7 @@ function parseFrontmatter(content: string): { meta: Record<string, string>; body
 		}
 	}
 
-	return { meta, body: match[2] };
+	return { meta, body: match[2]! };
 }
 
 // ─── Instruction Files (AGENTS.md / CLAUDE.md) ──────────────────────────────
@@ -101,7 +101,7 @@ async function findSkillFiles(dir: string, source: Skill["source"]): Promise<Ski
 					const { meta, body } = parseFrontmatter(content);
 					skills.push({
 						name: meta.name ?? entry.name,
-						description: meta.description ?? body.split("\n")[0].replace(/^#\s*/, ""),
+						description: meta.description ?? body.split("\n")[0]?.replace(/^#\s*/, "") ?? "",
 						content: body,
 						path: skillMd,
 						source,

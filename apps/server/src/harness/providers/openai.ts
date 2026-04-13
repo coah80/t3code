@@ -1,17 +1,17 @@
 // OpenAI provider — streams GPT/OpenRouter responses with tool use
 // Works with OpenAI, OpenRouter, and any OpenAI-compatible API
 
-import type { ToolDefinition, ConversationMessage, AgentEvent } from '../types.js';
+import type { ToolDefinition, ConversationMessage, AgentEvent } from '../types';
 
 interface OpenAIStreamOptions {
 	readonly model: string;
 	readonly apiKey: string;
-	readonly baseURL?: string;
+	readonly baseURL?: string | undefined;
 	readonly messages: readonly ConversationMessage[];
 	readonly tools: readonly ToolDefinition[];
 	readonly systemPrompt: string;
-	readonly reasoningEffort?: 'low' | 'medium' | 'high';
-	readonly signal?: AbortSignal;
+	readonly reasoningEffort?: 'low' | 'medium' | 'high' | undefined;
+	readonly signal?: AbortSignal | undefined;
 }
 
 export async function* streamOpenAI(options: OpenAIStreamOptions): AsyncGenerator<AgentEvent> {
@@ -94,7 +94,7 @@ export async function* streamOpenAI(options: OpenAIStreamOptions): AsyncGenerato
 			Authorization: `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify(body),
-		signal,
+		...(signal ? { signal } : {}),
 	});
 
 	if (!resp.ok) {

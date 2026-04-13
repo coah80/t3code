@@ -1,7 +1,7 @@
 // Anthropic provider — streams Claude responses with tool use
 // Implements the model-agnostic provider interface
 
-import type { ToolDefinition, ConversationMessage, AgentEvent } from '../types.js';
+import type { ToolDefinition, ConversationMessage, AgentEvent } from '../types';
 
 interface AnthropicStreamOptions {
 	readonly model: string;
@@ -9,8 +9,8 @@ interface AnthropicStreamOptions {
 	readonly messages: readonly ConversationMessage[];
 	readonly tools: readonly ToolDefinition[];
 	readonly systemPrompt: string;
-	readonly thinkingEnabled?: boolean;
-	readonly signal?: AbortSignal;
+	readonly thinkingEnabled?: boolean | undefined;
+	readonly signal?: AbortSignal | undefined;
 }
 
 interface AnthropicToolUse {
@@ -89,7 +89,7 @@ export async function* streamAnthropic(options: AnthropicStreamOptions): AsyncGe
 			'anthropic-beta': 'prompt-caching-2024-07-31',
 		},
 		body: JSON.stringify(body),
-		signal,
+		...(signal ? { signal } : {}),
 	});
 
 	if (!resp.ok) {

@@ -12,7 +12,7 @@ export interface QueuedFollowUp {
 	readonly id: string;
 	readonly prompt: string;
 	readonly createdAt: number;
-	readonly modelOverride?: string;
+	readonly modelOverride?: string | undefined;
 }
 
 export interface SteeringState {

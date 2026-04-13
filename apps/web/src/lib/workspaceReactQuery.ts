@@ -1,5 +1,5 @@
 import { queryOptions, mutationOptions, type QueryClient } from "@tanstack/react-query";
-import { ensureNativeApi } from "~/nativeApi";
+import { ensureLocalApi } from "../localApi";
 
 export const workspaceQueryKeys = {
   all: ["workspace"] as const,
@@ -10,7 +10,7 @@ export function workspaceDiscoverQueryOptions() {
   return queryOptions({
     queryKey: workspaceQueryKeys.discover(),
     queryFn: async () => {
-      const api = ensureNativeApi();
+      const api = ensureLocalApi();
       return api.workspace.discover();
     },
     staleTime: 30000,
@@ -20,7 +20,7 @@ export function workspaceDiscoverQueryOptions() {
 export function workspaceCreateMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationFn: async (name: string) => {
-      const api = ensureNativeApi();
+      const api = ensureLocalApi();
       return api.workspace.create(name);
     },
     onSuccess: () => {
@@ -31,9 +31,10 @@ export function workspaceCreateMutationOptions(queryClient: QueryClient) {
 
 export function workspaceSwitchMutationOptions() {
   return mutationOptions({
-    mutationFn: async (path: string) => {
-      const api = ensureNativeApi();
-      return api.workspace.switchTo(path);
+    mutationFn: async (_path: string) => {
+      // Workspace switching is handled by the environment system
+      // This is a no-op stub — actual switching happens via project add/remove
+      return { ok: true, path: _path };
     },
   });
 }

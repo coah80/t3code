@@ -1,7 +1,7 @@
 // Scheduled Tasks — cron-like scheduled agent runs
 // Tasks persist in Convex and execute on a timer
 
-import type { ScheduledTask } from '../types.js';
+import type { ScheduledTask } from '../types';
 
 // ─── Cron Expression Parser (basic) ──────────────────────────────────────────
 
@@ -22,7 +22,7 @@ function parseCronField(field: string, min: number, max: number): number[] {
 
 	for (const part of field.split(',')) {
 		if (part.includes('/')) {
-			const [range, stepStr] = part.split('/');
+			const [range = '*', stepStr = '1'] = part.split('/');
 			const step = parseInt(stepStr, 10);
 			const [start, end] = range === '*'
 				? [min, max]
@@ -30,12 +30,12 @@ function parseCronField(field: string, min: number, max: number): number[] {
 					? range.split('-').map(Number) as [number, number]
 					: [parseInt(range, 10), max];
 
-			for (let i = start; i <= end; i += step) {
+			for (let i = start!; i <= end!; i += step) {
 				values.push(i);
 			}
 		} else if (part.includes('-')) {
 			const [start, end] = part.split('-').map(Number);
-			for (let i = start; i <= end; i++) {
+			for (let i = start!; i <= end!; i++) {
 				values.push(i);
 			}
 		} else {
@@ -53,11 +53,11 @@ function parseCron(expression: string): CronFields {
 	}
 
 	return {
-		minute: parseCronField(parts[0], 0, 59),
-		hour: parseCronField(parts[1], 0, 23),
-		dayOfMonth: parseCronField(parts[2], 1, 31),
-		month: parseCronField(parts[3], 1, 12),
-		dayOfWeek: parseCronField(parts[4], 0, 6),
+		minute: parseCronField(parts[0]!, 0, 59),
+		hour: parseCronField(parts[1]!, 0, 23),
+		dayOfMonth: parseCronField(parts[2]!, 1, 31),
+		month: parseCronField(parts[3]!, 1, 12),
+		dayOfWeek: parseCronField(parts[4]!, 0, 6),
 	};
 }
 

@@ -1,5 +1,5 @@
 import { queryOptions, mutationOptions, type QueryClient } from "@tanstack/react-query";
-import { ensureNativeApi } from "~/nativeApi";
+import { ensureLocalApi } from "../localApi";
 
 export const scheduledTasksQueryKeys = {
   all: ["scheduledTasks"] as const,
@@ -10,7 +10,7 @@ export function scheduledTasksListQueryOptions() {
   return queryOptions({
     queryKey: scheduledTasksQueryKeys.list(),
     queryFn: async () => {
-      const api = ensureNativeApi();
+      const api = ensureLocalApi();
       return api.scheduledTasks.list();
     },
     staleTime: 5000,
@@ -26,7 +26,7 @@ export function scheduledTasksCreateMutationOptions(queryClient: QueryClient) {
       workspacePath: string;
       model: string;
     }) => {
-      const api = ensureNativeApi();
+      const api = ensureLocalApi();
       return api.scheduledTasks.create(input);
     },
     onSuccess: () => {
@@ -38,7 +38,7 @@ export function scheduledTasksCreateMutationOptions(queryClient: QueryClient) {
 export function scheduledTasksDeleteMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationFn: async (id: string) => {
-      const api = ensureNativeApi();
+      const api = ensureLocalApi();
       return api.scheduledTasks.remove(id);
     },
     onSuccess: () => {
@@ -50,7 +50,7 @@ export function scheduledTasksDeleteMutationOptions(queryClient: QueryClient) {
 export function scheduledTasksToggleMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
-      const api = ensureNativeApi();
+      const api = ensureLocalApi();
       return api.scheduledTasks.toggle(id, enabled);
     },
     onSuccess: () => {

@@ -203,6 +203,16 @@ export interface LocalApi {
     getSettings: () => Promise<ServerSettings>;
     updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
   };
+  scheduledTasks: {
+    list: () => Promise<{ tasks: readonly ScheduledTaskInfo[] }>;
+    create: (input: ScheduledTaskCreateInput) => Promise<{ task: ScheduledTaskInfo }>;
+    remove: (id: string) => Promise<{ ok: boolean; deleted: boolean }>;
+    toggle: (id: string, enabled: boolean) => Promise<{ task: ScheduledTaskInfo | null }>;
+  };
+  workspace: {
+    discover: () => Promise<{ projects: readonly WorkspaceProject[]; homeDir: string }>;
+    create: (name: string) => Promise<{ project: WorkspaceProject }>;
+  };
 }
 
 /**
@@ -268,18 +278,6 @@ export interface EnvironmentApi {
         onResubscribe?: () => void;
       },
     ) => () => void;
-  };
-  scheduledTasks: {
-    list: () => Promise<{ tasks: readonly ScheduledTaskInfo[] }>;
-    create: (input: ScheduledTaskCreateInput) => Promise<{ task: ScheduledTaskInfo }>;
-    remove: (id: string) => Promise<{ ok: boolean; deleted: boolean }>;
-    toggle: (id: string, enabled: boolean) => Promise<{ task: ScheduledTaskInfo | null }>;
-    run: (id: string) => Promise<{ ok: boolean; taskId: string; status: string }>;
-  };
-  workspace: {
-    discover: () => Promise<{ projects: readonly WorkspaceProject[]; homeDir: string }>;
-    create: (name: string) => Promise<{ project: WorkspaceProject }>;
-    switchTo: (path: string) => Promise<{ ok: boolean; path: string }>;
   };
 }
 

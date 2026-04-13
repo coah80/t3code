@@ -16,7 +16,9 @@ export type ToolName =
 	| 'SwitchMode'
 	| 'Task'
 	| 'Await'
-	| 'GenerateImage';
+	| 'GenerateImage'
+	| 'LSP'
+	| 'Skill';
 
 export interface ToolDefinition {
 	readonly name: ToolName;
@@ -33,7 +35,7 @@ export interface ToolCall {
 export interface ToolResult {
 	readonly tool_call_id: string;
 	readonly content: string;
-	readonly is_error?: boolean;
+	readonly is_error?: boolean | undefined;
 }
 
 export type AgentMode = 'agent' | 'chat' | 'plan' | 'debug';
@@ -44,10 +46,10 @@ export interface AgentConfig {
 	readonly apiKey: string;
 	readonly mode: AgentMode;
 	readonly workspaceRoot: string;
-	readonly systemPrompt?: string;
-	readonly maxTurns?: number;
-	readonly enableYolo?: boolean;
-	readonly yoloAllowlist?: readonly string[];
+	readonly systemPrompt?: string | undefined;
+	readonly maxTurns?: number | undefined;
+	readonly enableYolo?: boolean | undefined;
+	readonly yoloAllowlist?: readonly string[] | undefined;
 }
 
 export interface AgentTurn {
@@ -55,7 +57,7 @@ export interface AgentTurn {
 	readonly text: string;
 	readonly toolCalls: readonly ToolCall[];
 	readonly toolResults: readonly ToolResult[];
-	readonly thinkingContent?: string;
+	readonly thinkingContent?: string | undefined;
 }
 
 export type AgentEvent =
@@ -71,8 +73,8 @@ export type AgentEvent =
 export interface ConversationMessage {
 	readonly role: 'system' | 'user' | 'assistant' | 'tool';
 	readonly content: string | readonly ContentBlock[];
-	readonly tool_calls?: readonly ToolCall[];
-	readonly tool_call_id?: string;
+	readonly tool_calls?: readonly ToolCall[] | undefined;
+	readonly tool_call_id?: string | undefined;
 }
 
 export type ContentBlock =
@@ -86,8 +88,8 @@ export interface WorkspaceInfo {
 	readonly path: string;
 	readonly name: string;
 	readonly isHome: boolean;
-	readonly gitRemote?: string;
-	readonly lastAccessed?: number;
+	readonly gitRemote?: string | undefined;
+	readonly lastAccessed?: number | undefined;
 }
 
 // Scheduled task types
@@ -99,9 +101,9 @@ export interface ScheduledTask {
 	readonly workspacePath: string;
 	readonly model: string;
 	readonly enabled: boolean;
-	readonly lastRun?: number;
-	readonly nextRun?: number;
-	readonly lastResult?: string;
+	readonly lastRun?: number | undefined;
+	readonly nextRun?: number | undefined;
+	readonly lastResult?: string | undefined;
 }
 
 export interface Todo {

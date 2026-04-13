@@ -4,7 +4,7 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import type { WorkspaceInfo } from '../types.js';
+import type { WorkspaceInfo } from '../types';
 
 const PROJECT_DIRS = ['Projects', 'Developer', 'repos', 'workspace', 'code'];
 
@@ -40,7 +40,7 @@ export async function discoverProjects(): Promise<readonly WorkspaceInfo[]> {
 				try {
 					const gitConfig = await fs.readFile(join(fullPath, '.git', 'config'), 'utf-8');
 					const urlMatch = gitConfig.match(/url\s*=\s*(.+)/);
-					if (urlMatch) gitRemote = urlMatch[1].trim();
+					if (urlMatch?.[1]) gitRemote = urlMatch[1].trim();
 				} catch {
 					// Not a git repo, that's fine
 				}

@@ -1,7 +1,7 @@
 // System prompt builder — constructs model-appropriate system prompts
 // Based on patterns extracted from Cursor's harness
 
-import type { AgentConfig } from '../types.js';
+import type { AgentConfig } from '../types';
 import { homedir } from 'os';
 import { platform, arch, release } from 'os';
 

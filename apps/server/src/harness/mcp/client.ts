@@ -3,16 +3,16 @@
 // Supports both local (stdio) and remote (HTTP/SSE) servers
 
 import { spawn, type ChildProcess } from "child_process";
-import type { ToolDefinition } from "../types.js";
+import type { ToolDefinition } from "../types";
 
 export interface McpServerConfig {
 	readonly name: string;
 	readonly type: "local" | "remote";
-	readonly command?: readonly string[];
-	readonly url?: string;
-	readonly environment?: Readonly<Record<string, string>>;
-	readonly enabled?: boolean;
-	readonly timeout?: number;
+	readonly command?: readonly string[] | undefined;
+	readonly url?: string | undefined;
+	readonly environment?: Readonly<Record<string, string>> | undefined;
+	readonly enabled?: boolean | undefined;
+	readonly timeout?: number | undefined;
 }
 
 export interface McpTool {
@@ -37,7 +37,7 @@ async function createLocalClient(config: McpServerConfig): Promise<McpClient> {
 		throw new Error(`MCP server ${config.name}: command is required for local servers`);
 	}
 
-	const proc = spawn(command[0], command.slice(1) as string[], {
+	const proc = spawn(command[0]!, command.slice(1) as string[], {
 		stdio: ["pipe", "pipe", "pipe"],
 		env: { ...process.env, ...(config.environment ?? {}) },
 	});
@@ -127,17 +127,17 @@ async function createLocalClient(config: McpServerConfig): Promise<McpClient> {
 // ─── Remote HTTP Client ──────────────────────────────────────────────────────
 
 async function createRemoteClient(config: McpServerConfig): Promise<McpClient> {
-	const baseUrl = config.url;
-	if (!baseUrl) throw new Error(`MCP server ${config.name}: url is required for remote servers`);
+	if (!config.url) throw new Error(`MCP server ${config.name}: url is required for remote servers`);
+	const baseUrl: string = config.url;
 
 	async function mcpRequest(method: string, params?: unknown): Promise<unknown> {
 		const resp = await fetch(baseUrl, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-			signal: AbortSignal.timeout(config.timeout ?? 30000),
+			signal: AbortSignal.timeout(config.timeout ?? 30000) as AbortSignal,
 		});
-		const result = await resp.json();
+		const result = await resp.json() as { error?: { message: string }; result?: unknown };
 		if (result.error) throw new Error(result.error.message);
 		return result.result;
 	}

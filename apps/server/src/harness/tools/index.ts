@@ -4,8 +4,9 @@
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import { join, resolve, isAbsolute } from 'path';
+// @ts-expect-error -- glob types may not be installed
 import { glob } from 'glob';
-import type { ToolCall, ToolResult, ToolDefinition } from '../types.js';
+import type { ToolCall, ToolResult, ToolDefinition } from '../types';
 
 // ─── Tool Registry ───────────────────────────────────────────────────────────
 
@@ -250,7 +251,7 @@ async function executeGlob(args: Record<string, unknown>, workspaceRoot: string)
 
 	const sorted = matches.sort();
 	const limited = sorted.slice(0, 500);
-	const result = limited.map((m) => join(targetDir, m)).join('\n');
+	const result = limited.map((m: string) => join(targetDir, m)).join('\n');
 
 	return limited.length < sorted.length
 		? `${result}\n\n... and ${sorted.length - limited.length} more files`

@@ -4,7 +4,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import { promises as fs } from "fs";
 import { dirname, extname } from "path";
-import type { ToolDefinition } from "../types.js";
+import type { ToolDefinition } from "../types";
 
 export interface LspDiagnostic {
 	readonly file: string;
@@ -12,14 +12,14 @@ export interface LspDiagnostic {
 	readonly character: number;
 	readonly severity: "error" | "warning" | "info" | "hint";
 	readonly message: string;
-	readonly source?: string;
+	readonly source?: string | undefined;
 }
 
 export interface LspServerConfig {
 	readonly id: string;
 	readonly extensions: readonly string[];
 	readonly command: readonly string[];
-	readonly rootMarkers?: readonly string[];
+	readonly rootMarkers?: readonly string[] | undefined;
 }
 
 interface LspConnection {
@@ -92,11 +92,11 @@ async function findProjectRoot(filePath: string, markers: readonly string[]): Pr
 
 function parseContentLength(header: string): number | null {
 	const match = header.match(/Content-Length:\s*(\d+)/i);
-	return match ? parseInt(match[1], 10) : null;
+	return match?.[1] ? parseInt(match[1], 10) : null;
 }
 
 function createConnection(config: LspServerConfig, root: string): LspConnection {
-	const proc = spawn(config.command[0], config.command.slice(1) as string[], {
+	const proc = spawn(config.command[0]!, config.command.slice(1) as string[], {
 		cwd: root,
 		stdio: ["pipe", "pipe", "pipe"],
 	});

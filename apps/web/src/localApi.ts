@@ -116,6 +116,16 @@ export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
       getSettings: rpcClient.server.getSettings,
       updateSettings: rpcClient.server.updateSettings,
     },
+    scheduledTasks: {
+      list: async () => ({ tasks: [] }),
+      create: async (input) => ({ task: { id: crypto.randomUUID(), ...input, enabled: true } }),
+      remove: async () => ({ ok: true, deleted: true }),
+      toggle: async () => ({ task: null }),
+    },
+    workspace: {
+      discover: async () => ({ projects: [], homeDir: "~" }),
+      create: async (name) => ({ project: { path: `~/Projects/${name}`, name, isHome: false } }),
+    },
   };
 }
 

@@ -17,25 +17,25 @@ import type {
 	ToolCall,
 	ToolResult,
 	ToolDefinition,
-} from '../types.js';
-import { executeToolsParallel, getToolDefinitions } from '../tools/index.js';
-import { streamAnthropic } from '../providers/anthropic.js';
-import { streamOpenAI } from '../providers/openai.js';
-import { buildSystemPrompt } from './prompt.js';
-import { McpManager, type McpServerConfig } from '../mcp/client.js';
-import { LspManager } from '../lsp/client.js';
-import { discoverSkills, loadInstructions, getSkillToolDefinition, getSkillContent, type Skill } from '../skills/loader.js';
-import { createNudgeState, incrementTurn, shouldNudgeSkill, shouldNudgeMemory, resetSkillNudge, resetMemoryNudge, SKILL_NUDGE_MESSAGE, MEMORY_NUDGE_MESSAGE } from './skillNudge.js';
-import { spillTurnResults } from './resultSpill.js';
-import { CheckpointManager } from './checkpoint.js';
+} from '../types';
+import { executeToolsParallel, getToolDefinitions } from '../tools/index';
+import { streamAnthropic } from '../providers/anthropic';
+import { streamOpenAI } from '../providers/openai';
+import { buildSystemPrompt } from './prompt';
+import { McpManager, type McpServerConfig } from '../mcp/client';
+import { LspManager } from '../lsp/client';
+import { discoverSkills, loadInstructions, getSkillToolDefinition, getSkillContent, type Skill } from '../skills/loader';
+import { createNudgeState, incrementTurn, shouldNudgeSkill, shouldNudgeMemory, resetSkillNudge, resetMemoryNudge, SKILL_NUDGE_MESSAGE, MEMORY_NUDGE_MESSAGE } from './skillNudge';
+import { spillTurnResults } from './resultSpill';
+import { CheckpointManager } from './checkpoint';
 
 export interface AgentLoopOptions {
 	readonly config: AgentConfig;
 	readonly userMessage: string;
 	readonly conversationHistory?: readonly ConversationMessage[];
-	readonly signal?: AbortSignal;
-	readonly mcpConfigs?: readonly McpServerConfig[];
-	readonly lspManager?: LspManager;
+	readonly signal?: AbortSignal | undefined;
+	readonly mcpConfigs?: readonly McpServerConfig[] | undefined;
+	readonly lspManager?: LspManager | undefined;
 }
 
 export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<AgentEvent> {
@@ -174,7 +174,7 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 				// MCP tools (prefixed with mcp_)
 				if (call.name.startsWith('mcp_')) {
 					const parts = call.name.split('_');
-					const serverName = parts[1];
+					const serverName = parts[1]!;
 					const toolName = parts.slice(2).join('_');
 					const content = await mcpManager.callTool(serverName, toolName, call.arguments);
 					return { tool_call_id: call.id, content };
