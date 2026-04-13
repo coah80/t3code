@@ -10,352 +10,412 @@
 //   6. Auto-verify (lint check) after edits
 
 import type {
-	AgentConfig,
-	AgentEvent,
-	AgentTurn,
-	ConversationMessage,
-	ToolCall,
-	ToolResult,
-	ToolDefinition,
-} from '../types';
-import { executeToolsParallel, getToolDefinitions } from '../tools/index';
-import { streamAnthropic } from '../providers/anthropic';
-import { streamOpenAI } from '../providers/openai';
-import { buildSystemPrompt } from './prompt';
-import { McpManager, type McpServerConfig } from '../mcp/client';
-import { LspManager } from '../lsp/client';
-import { discoverSkills, loadInstructions, getSkillToolDefinition, getSkillContent, type Skill } from '../skills/loader';
-import { createNudgeState, incrementTurn, shouldNudgeSkill, shouldNudgeMemory, resetSkillNudge, resetMemoryNudge, SKILL_NUDGE_MESSAGE, MEMORY_NUDGE_MESSAGE } from './skillNudge';
-import { spillTurnResults } from './resultSpill';
-import { CheckpointManager } from './checkpoint';
+  AgentConfig,
+  AgentEvent,
+  AgentTurn,
+  ConversationMessage,
+  ToolCall,
+  ToolResult,
+  ToolDefinition,
+} from "../types";
+import { getToolDefinitions } from "../tools/index";
+import {
+  executeScheduledTaskTool,
+  getScheduledTaskToolDefinition,
+  type AgentScheduledTaskManager,
+} from "../tools/scheduledTasks";
+import { streamAnthropic } from "../providers/anthropic";
+import { streamOpenAI } from "../providers/openai";
+import { buildSystemPrompt } from "./prompt";
+import { McpManager, type McpServerConfig } from "../mcp/client";
+import { LspManager } from "../lsp/client";
+import {
+  discoverSkills,
+  loadInstructions,
+  getSkillToolDefinition,
+  getSkillContent,
+} from "../skills/loader";
+import {
+  createNudgeState,
+  incrementTurn,
+  shouldNudgeSkill,
+  shouldNudgeMemory,
+  resetSkillNudge,
+  resetMemoryNudge,
+  SKILL_NUDGE_MESSAGE,
+  MEMORY_NUDGE_MESSAGE,
+} from "./skillNudge";
+import { spillTurnResults } from "./resultSpill";
+import { CheckpointManager } from "./checkpoint";
 
 export interface AgentLoopOptions {
-	readonly config: AgentConfig;
-	readonly userMessage: string;
-	readonly conversationHistory?: readonly ConversationMessage[];
-	readonly signal?: AbortSignal | undefined;
-	readonly mcpConfigs?: readonly McpServerConfig[] | undefined;
-	readonly lspManager?: LspManager | undefined;
+  readonly config: AgentConfig;
+  readonly userMessage: string;
+  readonly conversationHistory?: readonly ConversationMessage[];
+  readonly signal?: AbortSignal | undefined;
+  readonly mcpConfigs?: readonly McpServerConfig[] | undefined;
+  readonly lspManager?: LspManager | undefined;
+  readonly scheduledTaskManager?: AgentScheduledTaskManager | undefined;
 }
 
 export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<AgentEvent> {
-	const { config, userMessage, conversationHistory = [], signal, mcpConfigs, lspManager } = options;
-	const maxTurns = config.maxTurns ?? 50;
+  const {
+    config,
+    userMessage,
+    conversationHistory = [],
+    signal,
+    mcpConfigs,
+    lspManager,
+    scheduledTaskManager,
+  } = options;
+  const maxTurns = config.maxTurns ?? 50;
 
-	// ─── Discover skills + instructions ────────────────────────────────
-	const [skills, instructions] = await Promise.all([
-		discoverSkills(config.workspaceRoot),
-		loadInstructions(config.workspaceRoot),
-	]);
+  // ─── Discover skills + instructions ────────────────────────────────
+  const [skills, instructions] = await Promise.all([
+    discoverSkills(config.workspaceRoot),
+    loadInstructions(config.workspaceRoot),
+  ]);
 
-	// ─── Connect MCP servers ───────────────────────────────────────────
-	const mcpManager = new McpManager();
-	if (mcpConfigs && mcpConfigs.length > 0) {
-		await mcpManager.connectAll(mcpConfigs);
-	}
+  // ─── Connect MCP servers ───────────────────────────────────────────
+  const mcpManager = new McpManager();
+  if (mcpConfigs && mcpConfigs.length > 0) {
+    await mcpManager.connectAll(mcpConfigs);
+  }
 
-	// ─── Build tools list (built-in + MCP + LSP + skills) ──────────────
-	const allTools: ToolDefinition[] = [
-		...(config.mode === 'plan' ? [] : getToolDefinitions()),
-		...mcpManager.getToolDefinitions(),
-	];
+  // ─── Build tools list (built-in + MCP + LSP + skills) ──────────────
+  const allTools: ToolDefinition[] = [
+    ...(config.mode === "plan" ? [] : getToolDefinitions()),
+    ...mcpManager.getToolDefinitions(),
+  ];
 
-	// Add LSP tool if manager provided
-	if (lspManager) {
-		allTools.push(lspManager.getToolDefinition());
-	}
+  // Add LSP tool if manager provided
+  if (lspManager) {
+    allTools.push(lspManager.getToolDefinition());
+  }
 
-	// Add skill tool if skills found
-	const skillTool = getSkillToolDefinition(skills);
-	if (skillTool) {
-		allTools.push(skillTool);
-	}
+  // Add skill tool if skills found
+  const skillTool = getSkillToolDefinition(skills);
+  if (skillTool) {
+    allTools.push(skillTool);
+  }
 
-	// ─── Build system prompt with instructions ─────────────────────────
-	let systemPrompt = config.systemPrompt ?? buildSystemPrompt(config);
-	if (instructions.length > 0) {
-		systemPrompt += "\n\n<instructions>\n" + instructions.join("\n\n---\n\n") + "\n</instructions>";
-	}
+  if (scheduledTaskManager) {
+    allTools.push(getScheduledTaskToolDefinition());
+  }
 
-	// Build initial conversation
-	const messages: ConversationMessage[] = [...conversationHistory];
-	messages.push({ role: 'user', content: userMessage });
+  // ─── Build system prompt with instructions ─────────────────────────
+  let systemPrompt = config.systemPrompt ?? buildSystemPrompt(config);
+  if (instructions.length > 0) {
+    systemPrompt += "\n\n<instructions>\n" + instructions.join("\n\n---\n\n") + "\n</instructions>";
+  }
 
-	let turnNumber = 0;
-	const editedFiles: Set<string> = new Set();
-	let nudgeState = createNudgeState();
-	const checkpointMgr = new CheckpointManager(config.workspaceRoot);
+  // Build initial conversation
+  const messages: ConversationMessage[] = [...conversationHistory];
+  messages.push({ role: "user", content: userMessage });
 
-	while (turnNumber < maxTurns) {
-		if (signal?.aborted) {
-			yield { type: 'error', error: 'Aborted by user' };
-			return;
-		}
+  let turnNumber = 0;
+  const editedFiles: Set<string> = new Set();
+  let nudgeState = createNudgeState();
+  const checkpointMgr = new CheckpointManager(config.workspaceRoot);
 
-		turnNumber++;
-		let turnText = '';
-		let thinkingText = '';
-		const toolCalls: ToolCall[] = [];
+  while (turnNumber < maxTurns) {
+    if (signal?.aborted) {
+      yield { type: "error", error: "Aborted by user" };
+      return;
+    }
 
-		// ─── Stream model response ─────────────────────────────────────────
-		const stream = config.provider === 'anthropic'
-			? streamAnthropic({
-				model: config.model,
-				apiKey: config.apiKey,
-				messages,
-				tools: allTools,
-				systemPrompt,
-				thinkingEnabled: true,
-				signal,
-			})
-			: streamOpenAI({
-				model: config.model,
-				apiKey: config.apiKey,
-				baseURL: config.provider === 'openrouter'
-					? 'https://openrouter.ai/api/v1'
-					: 'https://api.openai.com/v1',
-				messages,
-				tools: allTools,
-				systemPrompt,
-				signal,
-			});
+    turnNumber++;
+    let turnText = "";
+    let thinkingText = "";
+    const toolCalls: ToolCall[] = [];
 
-		for await (const event of stream) {
-			if (signal?.aborted) {
-				yield { type: 'error', error: 'Aborted by user' };
-				return;
-			}
+    // ─── Stream model response ─────────────────────────────────────────
+    const stream =
+      config.provider === "anthropic"
+        ? streamAnthropic({
+            model: config.model,
+            apiKey: config.apiKey,
+            ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+            messages,
+            tools: allTools,
+            systemPrompt,
+            thinkingEnabled: true,
+            signal,
+          })
+        : streamOpenAI({
+            model: config.model,
+            apiKey: config.apiKey,
+            baseURL:
+              config.baseURL ??
+              (config.provider === "openrouter"
+                ? "https://openrouter.ai/api/v1"
+                : "https://api.openai.com/v1"),
+            messages,
+            tools: allTools,
+            systemPrompt,
+            signal,
+          });
 
-			switch (event.type) {
-				case 'text_delta':
-					turnText += event.text;
-					yield event;
-					break;
+    for await (const event of stream) {
+      if (signal?.aborted) {
+        yield { type: "error", error: "Aborted by user" };
+        return;
+      }
 
-				case 'thinking_delta':
-					thinkingText += event.text;
-					yield event;
-					break;
+      switch (event.type) {
+        case "text_delta":
+          turnText += event.text;
+          yield event;
+          break;
 
-				case 'tool_call_start':
-					toolCalls.push(event.toolCall);
-					yield event;
-					break;
+        case "thinking_delta":
+          thinkingText += event.text;
+          yield event;
+          break;
 
-				case 'error':
-					yield event;
-					return;
-			}
-		}
+        case "tool_call_start":
+          toolCalls.push(event.toolCall);
+          yield event;
+          break;
 
-		// ─── No tool calls → agent is done ─────────────────────────────────
-		if (toolCalls.length === 0) {
-			// Append assistant message to history
-			messages.push({ role: 'assistant', content: turnText });
+        case "error":
+          yield event;
+          return;
+      }
+    }
 
-			const turn: AgentTurn = {
-				turnNumber,
-				text: turnText,
-				toolCalls: [],
-				toolResults: [],
-				thinkingContent: thinkingText || undefined,
-			};
-			yield { type: 'turn_complete', turn };
-			yield { type: 'agent_complete', totalTurns: turnNumber };
-			return;
-		}
+    // ─── No tool calls → agent is done ─────────────────────────────────
+    if (toolCalls.length === 0) {
+      // Append assistant message to history
+      messages.push({ role: "assistant", content: turnText });
 
-		// ─── Execute tool calls in PARALLEL ────────────────────────────────
-		yield { type: 'commentary', text: `Executing ${toolCalls.length} tool${toolCalls.length > 1 ? 's' : ''} in parallel...` };
+      const turn: AgentTurn = {
+        turnNumber,
+        text: turnText,
+        toolCalls: [],
+        toolResults: [],
+        thinkingContent: thinkingText || undefined,
+      };
+      yield { type: "turn_complete", turn };
+      yield { type: "agent_complete", totalTurns: turnNumber };
+      return;
+    }
 
-		// Route each tool call to the right executor
-		const results: ToolResult[] = await Promise.all(toolCalls.map(async (call): Promise<ToolResult> => {
-			try {
-				// MCP tools (prefixed with mcp_)
-				if (call.name.startsWith('mcp_')) {
-					const parts = call.name.split('_');
-					const serverName = parts[1]!;
-					const toolName = parts.slice(2).join('_');
-					const content = await mcpManager.callTool(serverName, toolName, call.arguments);
-					return { tool_call_id: call.id, content };
-				}
+    // ─── Execute tool calls in PARALLEL ────────────────────────────────
+    yield {
+      type: "commentary",
+      text: `Executing ${toolCalls.length} tool${toolCalls.length > 1 ? "s" : ""} in parallel...`,
+    };
 
-				// LSP tool
-				if (call.name === 'LSP' && lspManager) {
-					const op = call.arguments.operation as string;
-					const filePath = call.arguments.filePath as string;
-					const line = call.arguments.line as number;
-					const char = call.arguments.character as number;
+    // Route each tool call to the right executor
+    const results: ToolResult[] = await Promise.all(
+      toolCalls.map(async (call): Promise<ToolResult> => {
+        try {
+          // MCP tools (prefixed with mcp_)
+          if (call.name.startsWith("mcp_")) {
+            const parts = call.name.split("_");
+            const serverName = parts[1]!;
+            const toolName = parts.slice(2).join("_");
+            const content = await mcpManager.callTool(serverName, toolName, call.arguments);
+            return { tool_call_id: call.id, content };
+          }
 
-					let content: string;
-					switch (op) {
-						case 'getDiagnostics': {
-							const diags = await lspManager.getDiagnostics(filePath);
-							content = diags.length === 0
-								? 'No diagnostics found.'
-								: diags.map(d => `${d.severity.toUpperCase()} [${d.line}:${d.character}] ${d.message}${d.source ? ` (${d.source})` : ''}`).join('\n');
-							break;
-						}
-						case 'goToDefinition':
-							content = await lspManager.goToDefinition(filePath, line, char);
-							break;
-						case 'hover':
-							content = await lspManager.hover(filePath, line, char);
-							break;
-						default:
-							content = `Unknown LSP operation: ${op}`;
-					}
-					return { tool_call_id: call.id, content };
-				}
+          // LSP tool
+          if (call.name === "LSP" && lspManager) {
+            const op = call.arguments.operation as string;
+            const filePath = call.arguments.filePath as string;
+            const line = call.arguments.line as number;
+            const char = call.arguments.character as number;
 
-				// Skill tool
-				if (call.name === 'Skill') {
-					const skillName = call.arguments.name as string;
-					const content = getSkillContent(skills, skillName);
-					return { tool_call_id: call.id, content };
-				}
+            let content: string;
+            switch (op) {
+              case "getDiagnostics": {
+                const diags = await lspManager.getDiagnostics(filePath);
+                content =
+                  diags.length === 0
+                    ? "No diagnostics found."
+                    : diags
+                        .map(
+                          (d) =>
+                            `${d.severity.toUpperCase()} [${d.line}:${d.character}] ${d.message}${d.source ? ` (${d.source})` : ""}`,
+                        )
+                        .join("\n");
+                break;
+              }
+              case "goToDefinition":
+                content = await lspManager.goToDefinition(filePath, line, char);
+                break;
+              case "hover":
+                content = await lspManager.hover(filePath, line, char);
+                break;
+              default:
+                content = `Unknown LSP operation: ${op}`;
+            }
+            return { tool_call_id: call.id, content };
+          }
 
-				// Built-in tools
-				const { executeTool } = await import('../tools/index.js');
-				return executeTool(call, config.workspaceRoot);
-			} catch (error) {
-				return {
-					tool_call_id: call.id,
-					content: `Tool error: ${error instanceof Error ? error.message : String(error)}`,
-					is_error: true,
-				};
-			}
-		}));
+          // Skill tool
+          if (call.name === "Skill") {
+            const skillName = call.arguments.name as string;
+            const content = getSkillContent(skills, skillName);
+            return { tool_call_id: call.id, content };
+          }
 
-		// ─── Checkpoint before file mutations ──────────────────────────────
-		const mutatingFiles = toolCalls
-			.filter((tc) => ['Write', 'StrReplace', 'Delete'].includes(tc.name))
-			.map((tc) => tc.arguments.path as string)
-			.filter(Boolean);
+          if (call.name === "ScheduledTask" && scheduledTaskManager) {
+            const content = await executeScheduledTaskTool(call.arguments, {
+              manager: scheduledTaskManager,
+              config,
+            });
+            return { tool_call_id: call.id, content };
+          }
 
-		if (mutatingFiles.length > 0) {
-			try {
-				await checkpointMgr.createCheckpoint(
-					`Turn ${turnNumber}: ${mutatingFiles.map((f) => f.split('/').pop()).join(', ')}`,
-					mutatingFiles,
-				);
-			} catch { /* checkpoint is best-effort */ }
-		}
+          // Built-in tools
+          const { executeTool } = await import("../tools/index.js");
+          return executeTool(call, config.workspaceRoot);
+        } catch (error) {
+          return {
+            tool_call_id: call.id,
+            content: `Tool error: ${error instanceof Error ? error.message : String(error)}`,
+            is_error: true,
+          };
+        }
+      }),
+    );
 
-		// Track edited files for auto-verification
-		for (const tc of toolCalls) {
-			if (['Write', 'StrReplace'].includes(tc.name)) {
-				const path = tc.arguments.path as string;
-				if (path) editedFiles.add(path);
-			}
-		}
+    // ─── Checkpoint before file mutations ──────────────────────────────
+    const mutatingFiles = toolCalls
+      .filter((tc) => ["Write", "StrReplace", "Delete"].includes(tc.name))
+      .map((tc) => tc.arguments.path as string)
+      .filter(Boolean);
 
-		// ─── Spill large results to temp files ─────────────────────────────
-		const spilledContents = await spillTurnResults(
-			results.map((r) => ({ content: r.content, toolName: toolCalls.find((tc) => tc.id === r.tool_call_id)?.name ?? 'unknown' })),
-		);
-		const spilledResults: ToolResult[] = results.map((r, i) => ({
-			...r,
-			content: spilledContents[i] ?? r.content,
-		}));
+    if (mutatingFiles.length > 0) {
+      try {
+        await checkpointMgr.createCheckpoint(
+          `Turn ${turnNumber}: ${mutatingFiles.map((f) => f.split("/").pop()).join(", ")}`,
+          mutatingFiles,
+        );
+      } catch {
+        /* checkpoint is best-effort */
+      }
+    }
 
-		// Emit tool results (with spilled content)
-		for (const result of spilledResults) {
-			yield { type: 'tool_call_complete', toolCallId: result.tool_call_id, result };
-		}
+    // Track edited files for auto-verification
+    for (const tc of toolCalls) {
+      if (["Write", "StrReplace"].includes(tc.name)) {
+        const path = tc.arguments.path as string;
+        if (path) editedFiles.add(path);
+      }
+    }
 
-		// ─── Append to conversation history ────────────────────────────────
-		// Assistant message with tool calls
-		messages.push({
-			role: 'assistant',
-			content: turnText,
-			tool_calls: toolCalls,
-		});
+    // ─── Spill large results to temp files ─────────────────────────────
+    const spilledContents = await spillTurnResults(
+      results.map((r) => ({
+        content: r.content,
+        toolName: toolCalls.find((tc) => tc.id === r.tool_call_id)?.name ?? "unknown",
+      })),
+    );
+    const spilledResults: ToolResult[] = results.map((r, i) => ({
+      ...r,
+      content: spilledContents[i] ?? r.content,
+    }));
 
-		// Tool results as separate messages (using spilled content)
-		if (config.provider === 'anthropic') {
-			messages.push({
-				role: 'user',
-				content: spilledResults.map((r) => ({
-					type: 'tool_result' as const,
-					tool_use_id: r.tool_call_id,
-					content: r.content,
-				})),
-			});
-		} else {
-			for (const result of spilledResults) {
-				messages.push({
-					role: 'tool',
-					content: result.content,
-					tool_call_id: result.tool_call_id,
-				});
-			}
-		}
+    // Emit tool results (with spilled content)
+    for (const result of spilledResults) {
+      yield { type: "tool_call_complete", toolCallId: result.tool_call_id, result };
+    }
 
-		// ─── Nudge system — periodic skill/memory reminders ────────────────
-		nudgeState = incrementTurn(nudgeState);
+    // ─── Append to conversation history ────────────────────────────────
+    // Assistant message with tool calls
+    messages.push({
+      role: "assistant",
+      content: turnText,
+      tool_calls: toolCalls,
+    });
 
-		if (shouldNudgeSkill(nudgeState)) {
-			messages.push({ role: 'user', content: SKILL_NUDGE_MESSAGE });
-			nudgeState = resetSkillNudge(nudgeState);
-		}
+    // Tool results as separate messages (using spilled content)
+    if (config.provider === "anthropic") {
+      messages.push({
+        role: "user",
+        content: spilledResults.map((r) => ({
+          type: "tool_result" as const,
+          tool_use_id: r.tool_call_id,
+          content: r.content,
+        })),
+      });
+    } else {
+      for (const result of spilledResults) {
+        messages.push({
+          role: "tool",
+          content: result.content,
+          tool_call_id: result.tool_call_id,
+        });
+      }
+    }
 
-		if (shouldNudgeMemory(nudgeState)) {
-			messages.push({ role: 'user', content: MEMORY_NUDGE_MESSAGE });
-			nudgeState = resetMemoryNudge(nudgeState);
-		}
+    // ─── Nudge system — periodic skill/memory reminders ────────────────
+    nudgeState = incrementTurn(nudgeState);
 
-		const turn: AgentTurn = {
-			turnNumber,
-			text: turnText,
-			toolCalls,
-			toolResults: [...results],
-			thinkingContent: thinkingText || undefined,
-		};
-		yield { type: 'turn_complete', turn };
+    if (shouldNudgeSkill(nudgeState)) {
+      messages.push({ role: "user", content: SKILL_NUDGE_MESSAGE });
+      nudgeState = resetSkillNudge(nudgeState);
+    }
 
-		// ─── Auto-verification: lint check after edits ─────────────────────
-		if (editedFiles.size > 0 && turnNumber > 1) {
-			// Check if the model just finished a sequence of edits without
-			// already calling ReadLints. If so, we inject a lint check hint.
-			const lastToolNames = toolCalls.map((tc) => tc.name);
-			const hasEdits = lastToolNames.some((n) => ['Write', 'StrReplace'].includes(n));
-			const alreadyCheckedLints = lastToolNames.includes('ReadLints');
+    if (shouldNudgeMemory(nudgeState)) {
+      messages.push({ role: "user", content: MEMORY_NUDGE_MESSAGE });
+      nudgeState = resetMemoryNudge(nudgeState);
+    }
 
-			if (hasEdits && !alreadyCheckedLints) {
-				// The model will naturally check lints on the next turn because
-				// the system prompt says to. We just track that it should.
-				// In Cursor, this is the LOOP_ON_LINTS capability.
-			}
-		}
-	}
+    const turn: AgentTurn = {
+      turnNumber,
+      text: turnText,
+      toolCalls,
+      toolResults: [...results],
+      thinkingContent: thinkingText || undefined,
+    };
+    yield { type: "turn_complete", turn };
 
-	// Cleanup
-	mcpManager.closeAll();
+    // ─── Auto-verification: lint check after edits ─────────────────────
+    if (editedFiles.size > 0 && turnNumber > 1) {
+      // Check if the model just finished a sequence of edits without
+      // already calling ReadLints. If so, we inject a lint check hint.
+      const lastToolNames = toolCalls.map((tc) => tc.name);
+      const hasEdits = lastToolNames.some((n) => ["Write", "StrReplace"].includes(n));
+      const alreadyCheckedLints = lastToolNames.includes("ReadLints");
 
-	yield { type: 'error', error: `Max turns (${maxTurns}) reached` };
+      if (hasEdits && !alreadyCheckedLints) {
+        // The model will naturally check lints on the next turn because
+        // the system prompt says to. We just track that it should.
+        // In Cursor, this is the LOOP_ON_LINTS capability.
+      }
+    }
+  }
+
+  // Cleanup
+  mcpManager.closeAll();
+
+  yield { type: "error", error: `Max turns (${maxTurns}) reached` };
 }
 
 // ─── Subagent Support ────────────────────────────────────────────────────────
 
 export interface SubagentOptions {
-	readonly parentConfig: AgentConfig;
-	readonly prompt: string;
-	readonly subagentType?: string;
-	readonly readonly?: boolean;
+  readonly parentConfig: AgentConfig;
+  readonly prompt: string;
+  readonly subagentType?: string;
+  readonly readonly?: boolean;
 }
 
 export async function* runSubagent(options: SubagentOptions): AsyncGenerator<AgentEvent> {
-	const { parentConfig, prompt, readonly } = options;
+  const { parentConfig, prompt, readonly } = options;
 
-	const subConfig: AgentConfig = {
-		...parentConfig,
-		mode: readonly ? 'chat' : 'agent',
-		maxTurns: 20,
-	};
+  const subConfig: AgentConfig = {
+    ...parentConfig,
+    mode: readonly ? "chat" : "agent",
+    maxTurns: 20,
+  };
 
-	yield* runAgentLoop({
-		config: subConfig,
-		userMessage: prompt,
-	});
+  yield* runAgentLoop({
+    config: subConfig,
+    userMessage: prompt,
+  });
 }

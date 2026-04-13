@@ -13,6 +13,8 @@ import {
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { sanitizeProjectFolderName } from "@t3tools/shared/homeProject";
+import { basename } from "node:path";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -86,6 +88,30 @@ function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolea
   return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
     ? trimmedCurrentTitle === trimmedTitleSeed
     : false;
+}
+
+function canReplaceProjectTitleForGeneratedFirstTurnName(input: {
+  readonly currentProjectTitle: string;
+  readonly titleSeed?: string;
+  readonly workspaceRoot: string;
+  readonly activeProjectThreadCount: number;
+}): boolean {
+  const trimmedTitleSeed = input.titleSeed?.trim();
+  if (!trimmedTitleSeed) {
+    return false;
+  }
+
+  if (input.currentProjectTitle.trim() !== trimmedTitleSeed) {
+    return false;
+  }
+
+  if (input.activeProjectThreadCount !== 1) {
+    return false;
+  }
+
+  const expectedBaseName = sanitizeProjectFolderName(trimmedTitleSeed);
+  const actualBaseName = basename(input.workspaceRoot).trim();
+  return actualBaseName === expectedBaseName || actualBaseName.startsWith(`${expectedBaseName} `);
 }
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
@@ -216,6 +242,32 @@ const make = Effect.gen(function* () {
   const resolveThread = Effect.fn("resolveThread")(function* (threadId: ThreadId) {
     const readModel = yield* orchestrationEngine.getReadModel();
     return readModel.threads.find((entry) => entry.id === threadId);
+  });
+
+  const resolveProjectForThread = Effect.fn("resolveProjectForThread")(function* (
+    threadId: ThreadId,
+  ) {
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    if (!thread) {
+      return;
+    }
+
+    const project = readModel.projects.find(
+      (entry) => entry.id === thread.projectId && entry.deletedAt === null,
+    );
+    if (!project) {
+      return;
+    }
+
+    const activeProjectThreadCount = readModel.threads.filter(
+      (entry) => entry.projectId === project.id && entry.deletedAt === null,
+    ).length;
+
+    return {
+      project,
+      activeProjectThreadCount,
+    };
   });
 
   const ensureSessionForThread = Effect.fn("ensureSessionForThread")(function* (
@@ -495,6 +547,27 @@ const make = Effect.gen(function* () {
           type: "thread.meta.update",
           commandId: serverCommandId("thread-title-rename"),
           threadId: input.threadId,
+          title: generated.title,
+        });
+
+        const projectForThread = yield* resolveProjectForThread(input.threadId);
+        if (
+          !projectForThread ||
+          !canReplaceProjectTitleForGeneratedFirstTurnName({
+            currentProjectTitle: projectForThread.project.title,
+            workspaceRoot: projectForThread.project.workspaceRoot,
+            activeProjectThreadCount: projectForThread.activeProjectThreadCount,
+            ...(input.titleSeed !== undefined ? { titleSeed: input.titleSeed } : {}),
+          }) ||
+          projectForThread.project.title === generated.title
+        ) {
+          return;
+        }
+
+        yield* orchestrationEngine.dispatch({
+          type: "project.meta.update",
+          commandId: serverCommandId("project-title-rename"),
+          projectId: projectForThread.project.id,
           title: generated.title,
         });
       }).pipe(

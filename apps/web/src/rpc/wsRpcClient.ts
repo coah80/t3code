@@ -109,6 +109,18 @@ export interface WsRpcClient {
     readonly subscribeLifecycle: RpcStreamMethod<typeof WS_METHODS.subscribeServerLifecycle>;
     readonly subscribeAuthAccess: RpcStreamMethod<typeof WS_METHODS.subscribeAuthAccess>;
   };
+  readonly scheduledTasks: {
+    readonly list: RpcUnaryNoArgMethod<typeof WS_METHODS.scheduledTasksList>;
+    readonly create: RpcUnaryMethod<typeof WS_METHODS.scheduledTasksCreate>;
+    readonly update: RpcUnaryMethod<typeof WS_METHODS.scheduledTasksUpdate>;
+    readonly remove: RpcUnaryMethod<typeof WS_METHODS.scheduledTasksDelete>;
+    readonly toggle: RpcUnaryMethod<typeof WS_METHODS.scheduledTasksToggle>;
+  };
+  readonly workspace: {
+    readonly discover: RpcUnaryNoArgMethod<typeof WS_METHODS.workspaceDiscover>;
+    readonly create: RpcUnaryMethod<typeof WS_METHODS.workspaceCreate>;
+    readonly switch: RpcUnaryMethod<typeof WS_METHODS.workspaceSwitch>;
+  };
   readonly orchestration: {
     readonly dispatchCommand: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.dispatchCommand>;
     readonly getTurnDiff: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.getTurnDiff>;
@@ -225,6 +237,22 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           listener,
           options,
         ),
+    },
+    scheduledTasks: {
+      list: () => transport.request((client) => client[WS_METHODS.scheduledTasksList]({})),
+      create: (input) =>
+        transport.request((client) => client[WS_METHODS.scheduledTasksCreate](input)),
+      update: (input) =>
+        transport.request((client) => client[WS_METHODS.scheduledTasksUpdate](input)),
+      remove: (input) =>
+        transport.request((client) => client[WS_METHODS.scheduledTasksDelete](input)),
+      toggle: (input) =>
+        transport.request((client) => client[WS_METHODS.scheduledTasksToggle](input)),
+    },
+    workspace: {
+      discover: () => transport.request((client) => client[WS_METHODS.workspaceDiscover]({})),
+      create: (input) => transport.request((client) => client[WS_METHODS.workspaceCreate](input)),
+      switch: (input) => transport.request((client) => client[WS_METHODS.workspaceSwitch](input)),
     },
     orchestration: {
       dispatchCommand: (input) =>

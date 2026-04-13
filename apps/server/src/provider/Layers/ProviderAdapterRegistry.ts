@@ -9,6 +9,7 @@
  */
 import { Effect, Layer } from "effect";
 
+import { ServerSettingsService } from "../../serverSettings";
 import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
@@ -17,6 +18,8 @@ import {
 } from "../Services/ProviderAdapterRegistry.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
+import { HarnessAdapter } from "../Services/HarnessAdapter.ts";
+import { makeRoutedProviderAdapter } from "./routedProviderAdapter";
 
 export interface ProviderAdapterRegistryLiveOptions {
   readonly adapters?: ReadonlyArray<ProviderAdapterShape<ProviderAdapterError>>;
@@ -25,11 +28,32 @@ export interface ProviderAdapterRegistryLiveOptions {
 const makeProviderAdapterRegistry = Effect.fn("makeProviderAdapterRegistry")(function* (
   options?: ProviderAdapterRegistryLiveOptions,
 ) {
-  const adapters =
-    options?.adapters !== undefined
-      ? options.adapters
-      : [yield* CodexAdapter, yield* ClaudeAdapter];
-  const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
+  let activeAdapters: ReadonlyArray<ProviderAdapterShape<ProviderAdapterError>>;
+  if (options?.adapters !== undefined) {
+    activeAdapters = options.adapters;
+  } else {
+    const nativeCodexAdapter = yield* CodexAdapter;
+    const nativeClaudeAdapter = yield* ClaudeAdapter;
+    const harnessAdapter = yield* HarnessAdapter;
+    const serverSettings = yield* ServerSettingsService;
+
+    activeAdapters = [
+      makeRoutedProviderAdapter({
+        provider: "codex",
+        nativeAdapter: nativeCodexAdapter,
+        harnessAdapter,
+        serverSettings,
+      }),
+      makeRoutedProviderAdapter({
+        provider: "claudeAgent",
+        nativeAdapter: nativeClaudeAdapter,
+        harnessAdapter,
+        serverSettings,
+      }),
+      harnessAdapter,
+    ] satisfies ReadonlyArray<ProviderAdapterShape<ProviderAdapterError>>;
+  }
+  const byProvider = new Map(activeAdapters.map((adapter) => [adapter.provider, adapter]));
 
   const getByProvider: ProviderAdapterRegistryShape["getByProvider"] = (provider) => {
     const adapter = byProvider.get(provider);

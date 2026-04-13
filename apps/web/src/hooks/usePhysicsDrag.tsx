@@ -1,7 +1,4 @@
-// Physics-based drag hook — thread dangles from cursor with spring physics
-// Creates a natural swinging/dangling effect when dragging threads between folders
-
-import { useCallback, useRef, useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface PhysicsState {
   x: number;
@@ -13,165 +10,300 @@ interface PhysicsState {
 }
 
 interface DragState {
-  isDragging: boolean;
+  phase: "idle" | "pending" | "dragging";
   startX: number;
   startY: number;
   currentX: number;
   currentY: number;
   physics: PhysicsState;
   draggedId: string | null;
+  dropTargetId: string | null;
 }
 
-const SPRING_STIFFNESS = 0.15;
-const DAMPING = 0.85;
-const GRAVITY = 0.3;
-const PENDULUM_LENGTH = 24;
-const ANGULAR_DAMPING = 0.92;
+interface PointerMotionState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  speed: number;
+  time: number;
+}
+
+const INITIAL_PHYSICS_STATE: PhysicsState = {
+  x: 0,
+  y: 0,
+  vx: 0,
+  vy: 0,
+  angle: 0,
+  angularVelocity: 0,
+};
+
+const INITIAL_DRAG_STATE: DragState = {
+  phase: "idle",
+  startX: 0,
+  startY: 0,
+  currentX: 0,
+  currentY: 0,
+  physics: INITIAL_PHYSICS_STATE,
+  draggedId: null,
+  dropTargetId: null,
+};
+
+const SPRING_STIFFNESS = 0.12;
+const DAMPING = 0.9;
+const GRAVITY = 0.36;
+const BASE_PENDULUM_LENGTH = 34;
+const MAX_PENDULUM_STRETCH = 24;
+const ANGULAR_DAMPING = 0.97;
+const ANGULAR_SWING_FORCE = 0.0032;
+const VERTICAL_SWING_FORCE = 0.0011;
+const MAX_SWING_ANGLE = Math.PI * 0.72;
+const DRAG_ACTIVATION_DISTANCE = 6;
+
+const INITIAL_POINTER_MOTION: PointerMotionState = {
+  x: 0,
+  y: 0,
+  vx: 0,
+  vy: 0,
+  speed: 0,
+  time: 0,
+};
+
+function resolveDropTargetId(clientX: number, clientY: number) {
+  const target = document.elementFromPoint(clientX, clientY);
+  const dropZone = target?.closest("[data-drop-zone]");
+  return dropZone?.getAttribute("data-drop-zone") ?? null;
+}
 
 export function usePhysicsDrag(onDrop?: (itemId: string, targetId: string) => void) {
-  const [dragState, setDragState] = useState<DragState>({
-    isDragging: false,
-    startX: 0,
-    startY: 0,
-    currentX: 0,
-    currentY: 0,
-    physics: { x: 0, y: 0, vx: 0, vy: 0, angle: 0, angularVelocity: 0 },
-    draggedId: null,
-  });
+  const [dragState, setDragState] = useState<DragState>(INITIAL_DRAG_STATE);
+  const dragStateRef = useRef(dragState);
+  dragStateRef.current = dragState;
 
   const rafRef = useRef<number>(0);
-  const stateRef = useRef(dragState);
-  stateRef.current = dragState;
+  const pointerMotionRef = useRef<PointerMotionState>(INITIAL_POINTER_MOTION);
+  const suppressClickRef = useRef(false);
 
-  const prevMouseRef = useRef({ x: 0, y: 0 });
-  const mouseVelocityRef = useRef({ x: 0, y: 0 });
+  const setDragStateWithRef = useCallback(
+    (nextState: DragState | ((previousState: DragState) => DragState)) => {
+      setDragState((previousState) => {
+        const resolvedState =
+          typeof nextState === "function" ? nextState(previousState) : nextState;
+        dragStateRef.current = resolvedState;
+        return resolvedState;
+      });
+    },
+    [],
+  );
 
-  // Physics simulation loop
+  const stopSimulation = useCallback(() => {
+    if (rafRef.current !== 0) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+    }
+  }, []);
+
   const simulate = useCallback(() => {
-    const s = stateRef.current;
-    if (!s.isDragging) return;
+    const currentState = dragStateRef.current;
+    if (currentState.phase !== "dragging") {
+      return;
+    }
 
-    // Mouse velocity for pendulum swing
-    const mx = s.currentX - prevMouseRef.current.x;
-    const my = s.currentY - prevMouseRef.current.y;
-    mouseVelocityRef.current = { x: mx, y: my };
-    prevMouseRef.current = { x: s.currentX, y: s.currentY };
+    const motion = pointerMotionRef.current;
+    const ropeLength = BASE_PENDULUM_LENGTH + Math.min(motion.speed * 0.08, MAX_PENDULUM_STRETCH);
+    const horizontalForce = -motion.vx * ANGULAR_SWING_FORCE;
+    const verticalForce = motion.vy * VERTICAL_SWING_FORCE;
+    const gravityForce = -Math.sin(currentState.physics.angle) * GRAVITY;
+    const angularVelocity =
+      (currentState.physics.angularVelocity + horizontalForce + verticalForce + gravityForce) *
+      ANGULAR_DAMPING;
+    const unclampedAngle = currentState.physics.angle + angularVelocity;
+    const angle = Math.max(-MAX_SWING_ANGLE, Math.min(MAX_SWING_ANGLE, unclampedAngle));
 
-    // Pendulum physics — angle driven by horizontal mouse acceleration
-    const horizontalForce = -mx * 0.02;
-    const gravityForce = -Math.sin(s.physics.angle) * GRAVITY * 0.1;
-    const newAngularVelocity = (s.physics.angularVelocity + horizontalForce + gravityForce) * ANGULAR_DAMPING;
-    const newAngle = s.physics.angle + newAngularVelocity;
+    const targetX = currentState.currentX + Math.sin(angle) * ropeLength;
+    const targetY = currentState.currentY + Math.cos(angle) * ropeLength;
+    const dx = targetX - currentState.physics.x;
+    const dy = targetY - currentState.physics.y;
+    const vx = (currentState.physics.vx + dx * SPRING_STIFFNESS) * DAMPING;
+    const vy = (currentState.physics.vy + dy * SPRING_STIFFNESS) * DAMPING;
 
-    // Clamp angle
-    const clampedAngle = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, newAngle));
+    pointerMotionRef.current = {
+      ...motion,
+      vx: motion.vx * 0.92,
+      vy: motion.vy * 0.92,
+      speed: motion.speed * 0.92,
+    };
 
-    // Spring following cursor
-    const targetX = s.currentX + Math.sin(clampedAngle) * PENDULUM_LENGTH;
-    const targetY = s.currentY + Math.cos(clampedAngle) * PENDULUM_LENGTH;
-
-    const dx = targetX - s.physics.x;
-    const dy = targetY - s.physics.y;
-
-    const newVx = (s.physics.vx + dx * SPRING_STIFFNESS) * DAMPING;
-    const newVy = (s.physics.vy + dy * SPRING_STIFFNESS) * DAMPING;
-
-    setDragState((prev) => ({
-      ...prev,
+    setDragStateWithRef((previousState) => ({
+      ...previousState,
       physics: {
-        x: prev.physics.x + newVx,
-        y: prev.physics.y + newVy,
-        vx: newVx,
-        vy: newVy,
-        angle: clampedAngle,
-        angularVelocity: newAngularVelocity,
+        x: previousState.physics.x + vx,
+        y: previousState.physics.y + vy,
+        vx,
+        vy,
+        angle,
+        angularVelocity,
       },
     }));
 
     rafRef.current = requestAnimationFrame(simulate);
-  }, []);
+  }, [setDragStateWithRef]);
 
   const startDrag = useCallback(
-    (e: React.MouseEvent, itemId: string) => {
-      e.preventDefault();
-      setDragState({
-        isDragging: true,
-        startX: e.clientX,
-        startY: e.clientY,
-        currentX: e.clientX,
-        currentY: e.clientY,
-        physics: {
-          x: e.clientX,
-          y: e.clientY + PENDULUM_LENGTH,
-          vx: 0,
-          vy: 0,
-          angle: 0,
-          angularVelocity: 0,
-        },
-        draggedId: itemId,
-      });
-      prevMouseRef.current = { x: e.clientX, y: e.clientY };
-      rafRef.current = requestAnimationFrame(simulate);
-    },
-    [simulate],
-  );
-
-  const updateDrag = useCallback((e: MouseEvent) => {
-    setDragState((prev) => {
-      if (!prev.isDragging) return prev;
-      return { ...prev, currentX: e.clientX, currentY: e.clientY };
-    });
-  }, []);
-
-  const endDrag = useCallback(
-    (e: MouseEvent) => {
-      cancelAnimationFrame(rafRef.current);
-
-      const s = stateRef.current;
-      if (!s.isDragging || !s.draggedId) {
-        setDragState((prev) => ({ ...prev, isDragging: false, draggedId: null }));
+    (event: React.MouseEvent, itemId: string) => {
+      if (event.button !== 0) {
         return;
       }
 
-      // Find drop target
-      const target = document.elementFromPoint(e.clientX, e.clientY);
-      const dropZone = target?.closest("[data-drop-zone]");
-      const targetId = dropZone?.getAttribute("data-drop-zone");
+      suppressClickRef.current = false;
+      pointerMotionRef.current = {
+        ...INITIAL_POINTER_MOTION,
+        x: event.clientX,
+        y: event.clientY,
+        time: performance.now(),
+      };
+      stopSimulation();
+      const nextState: DragState = {
+        phase: "pending",
+        startX: event.clientX,
+        startY: event.clientY,
+        currentX: event.clientX,
+        currentY: event.clientY,
+        physics: {
+          ...INITIAL_PHYSICS_STATE,
+          x: event.clientX,
+          y: event.clientY + BASE_PENDULUM_LENGTH,
+        },
+        draggedId: itemId,
+        dropTargetId: null,
+      };
+      dragStateRef.current = nextState;
+      setDragState(nextState);
+    },
+    [stopSimulation],
+  );
 
-      if (targetId && onDrop) {
-        onDrop(s.draggedId, targetId);
+  const updateDrag = useCallback(
+    (event: MouseEvent) => {
+      const currentState = dragStateRef.current;
+      if (currentState.phase === "idle") {
+        return;
       }
 
-      setDragState((prev) => ({ ...prev, isDragging: false, draggedId: null }));
+      const now = performance.now();
+      const previousPointer = pointerMotionRef.current;
+      const frameDuration = Math.max(now - previousPointer.time, 8);
+      const frameScale = 16.67 / frameDuration;
+      const vx = (event.clientX - previousPointer.x) * frameScale;
+      const vy = (event.clientY - previousPointer.y) * frameScale;
+      pointerMotionRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+        vx,
+        vy,
+        speed: Math.hypot(vx, vy),
+        time: now,
+      };
+
+      if (currentState.phase === "pending") {
+        const deltaX = event.clientX - currentState.startX;
+        const deltaY = event.clientY - currentState.startY;
+        if (Math.hypot(deltaX, deltaY) < DRAG_ACTIVATION_DISTANCE) {
+          return;
+        }
+
+        const nextState: DragState = {
+          ...currentState,
+          phase: "dragging",
+          currentX: event.clientX,
+          currentY: event.clientY,
+          physics: {
+            ...INITIAL_PHYSICS_STATE,
+            x: event.clientX,
+            y: event.clientY + BASE_PENDULUM_LENGTH,
+          },
+          dropTargetId: resolveDropTargetId(event.clientX, event.clientY),
+        };
+        dragStateRef.current = nextState;
+        setDragState(nextState);
+        rafRef.current = requestAnimationFrame(simulate);
+        return;
+      }
+
+      setDragStateWithRef((previousState) => ({
+        ...previousState,
+        currentX: event.clientX,
+        currentY: event.clientY,
+        dropTargetId: resolveDropTargetId(event.clientX, event.clientY),
+      }));
     },
-    [onDrop],
+    [setDragStateWithRef, simulate],
+  );
+
+  const endDrag = useCallback(
+    (event: MouseEvent) => {
+      stopSimulation();
+      const currentState = dragStateRef.current;
+      if (currentState.phase === "dragging" && currentState.draggedId) {
+        suppressClickRef.current = true;
+        const dropTargetId = resolveDropTargetId(event.clientX, event.clientY);
+        if (dropTargetId && onDrop) {
+          onDrop(currentState.draggedId, dropTargetId);
+        }
+      }
+
+      dragStateRef.current = INITIAL_DRAG_STATE;
+      setDragState(INITIAL_DRAG_STATE);
+    },
+    [onDrop, stopSimulation],
   );
 
   useEffect(() => {
-    if (dragState.isDragging) {
-      window.addEventListener("mousemove", updateDrag);
-      window.addEventListener("mouseup", endDrag);
-      return () => {
-        window.removeEventListener("mousemove", updateDrag);
-        window.removeEventListener("mouseup", endDrag);
-      };
+    if (dragState.phase === "idle") {
+      return;
     }
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [dragState.isDragging, updateDrag, endDrag]);
+
+    window.addEventListener("mousemove", updateDrag);
+    window.addEventListener("mouseup", endDrag);
+    return () => {
+      window.removeEventListener("mousemove", updateDrag);
+      window.removeEventListener("mouseup", endDrag);
+    };
+  }, [dragState.phase, endDrag, updateDrag]);
+
+  useEffect(() => {
+    if (dragState.phase !== "dragging") {
+      return;
+    }
+
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+    return () => {
+      document.body.style.userSelect = previousUserSelect;
+    };
+  }, [dragState.phase]);
+
+  useEffect(() => stopSimulation, [stopSimulation]);
+
+  const consumeClickSuppression = useCallback(() => {
+    const shouldSuppress = suppressClickRef.current;
+    suppressClickRef.current = false;
+    return shouldSuppress;
+  }, []);
 
   return {
-    isDragging: dragState.isDragging,
+    isDragging: dragState.phase === "dragging",
     draggedId: dragState.draggedId,
     cursorX: dragState.currentX,
     cursorY: dragState.currentY,
     physicsX: dragState.physics.x,
     physicsY: dragState.physics.y,
     angle: dragState.physics.angle,
+    activeDropTargetId: dragState.dropTargetId,
+    consumeClickSuppression,
     startDrag,
   };
 }
-
-// ─── Drag Ghost Component ────────────────────────────────────────────────────
 
 interface DragGhostProps {
   readonly visible: boolean;
@@ -183,40 +315,71 @@ interface DragGhostProps {
   readonly label: string;
 }
 
-export function DragGhost({ visible, cursorX, cursorY, physicsX, physicsY, angle, label }: DragGhostProps) {
-  if (!visible) return null;
+export function DragGhost({
+  visible,
+  cursorX,
+  cursorY,
+  physicsX,
+  physicsY,
+  angle,
+  label,
+}: DragGhostProps) {
+  if (!visible) {
+    return null;
+  }
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[9999]">
-      {/* String from cursor to ghost */}
       <svg className="absolute inset-0 h-full w-full">
-        <line
-          x1={cursorX}
-          y1={cursorY}
-          x2={physicsX}
-          y2={physicsY}
-          stroke="currentColor"
-          strokeWidth="1"
-          className="text-primary/40"
-        />
+        {(() => {
+          const dx = physicsX - cursorX;
+          const dy = physicsY - cursorY;
+          const distance = Math.hypot(dx, dy);
+          const perpendicularX = distance > 0 ? -dy / distance : 0;
+          const perpendicularY = distance > 0 ? dx / distance : 0;
+          const bend = Math.sin(angle) * Math.min(32, distance * 0.35);
+          const controlX = (cursorX + physicsX) / 2 + perpendicularX * bend;
+          const controlY = (cursorY + physicsY) / 2 + perpendicularY * bend;
+          const path = `M ${cursorX} ${cursorY} Q ${controlX} ${controlY} ${physicsX} ${physicsY}`;
+
+          return (
+            <>
+              <path
+                d={path}
+                stroke="currentColor"
+                strokeWidth="1.25"
+                fill="none"
+                strokeLinecap="round"
+                className="text-primary/30"
+              />
+              <path
+                d={path}
+                stroke="currentColor"
+                strokeWidth="0.6"
+                fill="none"
+                strokeLinecap="round"
+                className="text-primary/55"
+                strokeDasharray="2 3"
+              />
+            </>
+          );
+        })()}
       </svg>
 
-      {/* Dangling ghost card */}
       <div
-        className="absolute -translate-x-1/2 rounded-md border border-primary/30 bg-card/90 px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-sm"
+        className="absolute -translate-x-1/2 rounded-xl border border-primary/25 bg-card/92 px-3 py-1.5 text-xs font-medium text-foreground shadow-xl shadow-primary/10 backdrop-blur-sm"
         style={{
           left: physicsX,
           top: physicsY,
-          transform: `translate(-50%, 0) rotate(${angle * (180 / Math.PI) * 0.5}deg)`,
+          transform: `translate(-50%, 0) rotate(${angle * (180 / Math.PI) * 0.4}deg)`,
           transformOrigin: "top center",
         }}
       >
-        <span className="text-primary">{label}</span>
+        {label}
       </div>
 
-      {/* Cursor attachment point */}
       <div
-        className="absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/60"
+        className="absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/75 shadow-[0_0_18px_rgba(255,255,255,0.18)]"
         style={{ left: cursorX, top: cursorY }}
       />
     </div>

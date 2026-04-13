@@ -114,6 +114,7 @@ export const WS_METHODS = {
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksCreate: "scheduledTasks.create",
+  scheduledTasksUpdate: "scheduledTasks.update",
   scheduledTasksDelete: "scheduledTasks.delete",
   scheduledTasksToggle: "scheduledTasks.toggle",
 
@@ -352,41 +353,93 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
   stream: true,
 });
 
+const ScheduledTaskInfoSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  prompt: Schema.String,
+  cronExpression: Schema.String,
+  workspacePath: Schema.String,
+  model: Schema.String,
+  enabled: Schema.Boolean,
+  createdAt: Schema.optional(Schema.Number),
+  lastRun: Schema.optional(Schema.Number),
+});
+
+const WorkspaceProjectSchema = Schema.Struct({
+  path: Schema.String,
+  name: Schema.String,
+  isHome: Schema.Boolean,
+  gitRemote: Schema.optional(Schema.String),
+  lastAccessed: Schema.optional(Schema.Number),
+});
+
 // ── Scheduled Tasks RPCs ──────────────────────────────────────────────
 export const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
-  payload: { success: Schema.Unknown },
+  payload: Schema.Struct({}),
+  success: Schema.Struct({
+    tasks: Schema.Array(ScheduledTaskInfoSchema),
+  }),
 });
 export const WsScheduledTasksCreateRpc = Rpc.make(WS_METHODS.scheduledTasksCreate, {
-  payload: {
-    input: Schema.Struct({
-      name: Schema.String,
-      prompt: Schema.String,
-      cronExpression: Schema.String,
-      workspacePath: Schema.String,
-      model: Schema.String,
-    }),
-    success: Schema.Unknown,
-  },
+  payload: Schema.Struct({
+    name: Schema.String,
+    prompt: Schema.String,
+    cronExpression: Schema.String,
+    workspacePath: Schema.String,
+    model: Schema.String,
+  }),
+  success: Schema.Struct({
+    task: ScheduledTaskInfoSchema,
+  }),
+});
+export const WsScheduledTasksUpdateRpc = Rpc.make(WS_METHODS.scheduledTasksUpdate, {
+  payload: Schema.Struct({
+    id: Schema.String,
+    name: Schema.optional(Schema.String),
+    prompt: Schema.optional(Schema.String),
+    cronExpression: Schema.optional(Schema.String),
+    workspacePath: Schema.optional(Schema.String),
+    model: Schema.optional(Schema.String),
+    enabled: Schema.optional(Schema.Boolean),
+  }),
+  success: Schema.Struct({
+    task: Schema.NullOr(ScheduledTaskInfoSchema),
+  }),
 });
 export const WsScheduledTasksDeleteRpc = Rpc.make(WS_METHODS.scheduledTasksDelete, {
-  payload: { input: Schema.Struct({ id: Schema.String }), success: Schema.Unknown },
+  payload: Schema.Struct({ id: Schema.String }),
+  success: Schema.Struct({
+    ok: Schema.Boolean,
+    deleted: Schema.Boolean,
+  }),
 });
 export const WsScheduledTasksToggleRpc = Rpc.make(WS_METHODS.scheduledTasksToggle, {
-  payload: {
-    input: Schema.Struct({ id: Schema.String, enabled: Schema.Boolean }),
-    success: Schema.Unknown,
-  },
+  payload: Schema.Struct({ id: Schema.String, enabled: Schema.Boolean }),
+  success: Schema.Struct({
+    task: Schema.NullOr(ScheduledTaskInfoSchema),
+  }),
 });
 
 // ── Workspace RPCs ────────────────────────────────────────────────────
 export const WsWorkspaceDiscoverRpc = Rpc.make(WS_METHODS.workspaceDiscover, {
-  payload: { success: Schema.Unknown },
+  payload: Schema.Struct({}),
+  success: Schema.Struct({
+    projects: Schema.Array(WorkspaceProjectSchema),
+    homeDir: Schema.String,
+  }),
 });
 export const WsWorkspaceCreateRpc = Rpc.make(WS_METHODS.workspaceCreate, {
-  payload: { input: Schema.Struct({ name: Schema.String }), success: Schema.Unknown },
+  payload: Schema.Struct({ name: Schema.String }),
+  success: Schema.Struct({
+    project: WorkspaceProjectSchema,
+  }),
 });
 export const WsWorkspaceSwitchRpc = Rpc.make(WS_METHODS.workspaceSwitch, {
-  payload: { input: Schema.Struct({ path: Schema.String }), success: Schema.Unknown },
+  payload: Schema.Struct({ path: Schema.String }),
+  success: Schema.Struct({
+    ok: Schema.Boolean,
+    path: Schema.String,
+  }),
 });
 
 export const WsRpcGroup = RpcGroup.make(
@@ -428,6 +481,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationSubscribeThreadRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksCreateRpc,
+  WsScheduledTasksUpdateRpc,
   WsScheduledTasksDeleteRpc,
   WsScheduledTasksToggleRpc,
   WsWorkspaceDiscoverRpc,

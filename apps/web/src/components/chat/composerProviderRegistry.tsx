@@ -64,6 +64,13 @@ function getProviderStateFromCapabilities(
   input: ComposerProviderStateInput,
 ): ComposerProviderState {
   const { provider, model, models, prompt, modelOptions } = input;
+  if (provider === "harness") {
+    return {
+      provider,
+      promptEffort: null,
+      modelOptionsForDispatch: undefined,
+    };
+  }
   const caps = getProviderModelCapabilities(models, model, provider);
   const providerOptions = modelOptions?.[provider];
 
@@ -190,6 +197,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
           onPromptChange={onPromptChange}
         />
       ),
+  },
+  harness: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: () => null,
+    renderTraitsPicker: () => null,
   },
 };
 

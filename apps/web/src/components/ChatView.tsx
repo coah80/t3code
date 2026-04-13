@@ -1,17 +1,17 @@
 import {
-  type ApprovalRequestId,
+  ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
   type ClaudeCodeEffort,
   type EnvironmentId,
   type MessageId,
-  type ModelSelection,
+  ModelSelection,
   type ProjectScript,
   type ProviderKind,
   type ProjectId,
   type ProviderApprovalDecision,
   type ServerProvider,
   type ScopedThreadRef,
-  type ThreadId,
+  ThreadId,
   type TurnId,
   type KeybindingCommand,
   OrchestrationThreadActivity,
@@ -29,10 +29,13 @@ import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { Debouncer } from "@tanstack/react-pacer";
+import { useQuery } from "@tanstack/react-query";
+import { Schema } from "effect";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useGitStatus } from "~/lib/gitStatusState";
+import { workspaceDiscoverQueryOptions } from "~/lib/workspaceReactQuery";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
@@ -57,6 +60,7 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
   formatElapsed,
+  type PendingUserInput,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
@@ -98,6 +102,7 @@ import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { ChevronDownIcon } from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
+import { sanitizeProjectFolderName } from "@t3tools/shared/homeProject";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
@@ -105,9 +110,9 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newDraftId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { resolveAppModelSelection } from "../modelSelection";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { deriveLogicalProjectKey } from "../logicalProject";
@@ -119,6 +124,7 @@ import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  PersistedComposerImageAttachment,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
@@ -130,6 +136,7 @@ import {
 } from "../lib/terminalContext";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { ComposerQueuedFollowUpsPanel } from "./chat/ComposerQueuedFollowUpsPanel";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
@@ -153,6 +160,7 @@ import {
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   cloneComposerImageForRetry,
+  describeQueuedFollowUp,
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
@@ -177,8 +185,221 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const QUEUED_FOLLOW_UPS_STORAGE_KEY_PREFIX = "t3code:queued-follow-ups:";
+const HOME_THREAD_ROUTING_QUESTION_ID = "home_thread_routing";
+const HOME_THREAD_ROUTING_REQUEST_ID_PREFIX = "local-home-routing:";
+const HOME_THREAD_ROUTING_CREATE_PROJECT_LABEL = "Create project folder";
+const HOME_THREAD_ROUTING_KEEP_HOME_LABEL = "Keep in Home";
+
+type HomeThreadRoutingDecision = "project" | "home";
+type LocalHomeRoutingPrompt = {
+  readonly threadId: ThreadId;
+  readonly requestId: ApprovalRequestId;
+  readonly createdAt: string;
+  readonly autoSendOnResolve: boolean;
+};
 
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
+
+type QueuedFollowUpDraft = {
+  readonly id: string;
+  readonly prompt: string;
+  readonly images: ReadonlyArray<ComposerImageAttachment>;
+  readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+};
+
+const PersistedQueuedTerminalContextDraft = Schema.Struct({
+  id: Schema.String,
+  threadId: ThreadId,
+  createdAt: Schema.String,
+  terminalId: Schema.String,
+  terminalLabel: Schema.String,
+  lineStart: Schema.Number,
+  lineEnd: Schema.Number,
+  text: Schema.String,
+});
+
+const PersistedQueuedFollowUpDraftSchema = Schema.Struct({
+  id: Schema.String,
+  prompt: Schema.String,
+  images: Schema.Array(PersistedComposerImageAttachment),
+  terminalContexts: Schema.Array(PersistedQueuedTerminalContextDraft),
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+});
+
+type PersistedQueuedFollowUpDraft = typeof PersistedQueuedFollowUpDraftSchema.Type;
+const PersistedQueuedFollowUpDraftListSchema = Schema.Array(PersistedQueuedFollowUpDraftSchema);
+
+function queuedFollowUpsStorageKey(threadRef: ScopedThreadRef): string {
+  return `${QUEUED_FOLLOW_UPS_STORAGE_KEY_PREFIX}${scopedThreadKey(threadRef)}`;
+}
+
+function makeHomeThreadRoutingRequestId(threadId: ThreadId): ApprovalRequestId {
+  return ApprovalRequestId.make(`${HOME_THREAD_ROUTING_REQUEST_ID_PREFIX}${threadId}`);
+}
+
+function buildHomeThreadRoutingPendingUserInput(input: {
+  readonly requestId: ApprovalRequestId;
+  readonly createdAt: string;
+}): PendingUserInput {
+  return {
+    requestId: input.requestId,
+    createdAt: input.createdAt,
+    questions: [
+      {
+        id: HOME_THREAD_ROUTING_QUESTION_ID,
+        header: "HOME",
+        question:
+          "Should this stay in Home for general chat or research, or move into its own project folder?",
+        options: [
+          {
+            label: HOME_THREAD_ROUTING_CREATE_PROJECT_LABEL,
+            description: "Create a dedicated project folder and move this thread there.",
+          },
+          {
+            label: HOME_THREAD_ROUTING_KEEP_HOME_LABEL,
+            description: "Leave this thread in Home for general-purpose chat or research.",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function parseHomeThreadRoutingDecision(
+  answers: Record<string, unknown>,
+): HomeThreadRoutingDecision | null {
+  const rawAnswer = answers[HOME_THREAD_ROUTING_QUESTION_ID];
+  const label =
+    typeof rawAnswer === "string"
+      ? rawAnswer
+      : Array.isArray(rawAnswer) && typeof rawAnswer[0] === "string"
+        ? rawAnswer[0]
+        : null;
+
+  if (label === HOME_THREAD_ROUTING_CREATE_PROJECT_LABEL) {
+    return "project";
+  }
+  if (label === HOME_THREAD_ROUTING_KEEP_HOME_LABEL) {
+    return "home";
+  }
+  return null;
+}
+
+function fileFromDataUrl(dataUrl: string, name: string, mimeType: string): File | null {
+  const commaIndex = dataUrl.indexOf(",");
+  const header = commaIndex === -1 ? dataUrl : dataUrl.slice(0, commaIndex);
+  const payload = commaIndex === -1 ? "" : dataUrl.slice(commaIndex + 1);
+  if (payload.length === 0) {
+    return null;
+  }
+
+  try {
+    const isBase64 = header.includes(";base64");
+    if (!isBase64) {
+      return new File([decodeURIComponent(payload)], name, { type: mimeType });
+    }
+
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new File([bytes], name, { type: mimeType });
+  } catch {
+    return null;
+  }
+}
+
+function hydrateQueuedFollowUpDraft(
+  followUp: PersistedQueuedFollowUpDraft,
+): QueuedFollowUpDraft | null {
+  const images = followUp.images.flatMap((image) => {
+    const file = fileFromDataUrl(image.dataUrl, image.name, image.mimeType);
+    if (!file) {
+      return [];
+    }
+
+    return [
+      {
+        type: "image" as const,
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        previewUrl: image.dataUrl,
+        file,
+      } satisfies ComposerImageAttachment,
+    ];
+  });
+
+  return {
+    id: followUp.id,
+    prompt: followUp.prompt,
+    images,
+    terminalContexts: followUp.terminalContexts,
+    modelSelection: followUp.modelSelection,
+    runtimeMode: followUp.runtimeMode,
+    interactionMode: followUp.interactionMode,
+  };
+}
+
+async function persistQueuedFollowUpDraft(
+  followUp: QueuedFollowUpDraft,
+): Promise<PersistedQueuedFollowUpDraft> {
+  return {
+    id: followUp.id,
+    prompt: followUp.prompt,
+    images: await Promise.all(
+      followUp.images.map(async (image) => ({
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        dataUrl: await readFileAsDataUrl(image.file),
+      })),
+    ),
+    terminalContexts: followUp.terminalContexts.map((context) => ({
+      id: context.id,
+      threadId: context.threadId,
+      createdAt: context.createdAt,
+      terminalId: context.terminalId,
+      terminalLabel: context.terminalLabel,
+      lineStart: context.lineStart,
+      lineEnd: context.lineEnd,
+      text: context.text,
+    })),
+    modelSelection: followUp.modelSelection,
+    runtimeMode: followUp.runtimeMode,
+    interactionMode: followUp.interactionMode,
+  };
+}
+
+function reorderById<T extends { readonly id: string }>(
+  items: ReadonlyArray<T>,
+  followUpId: string,
+  targetIndex: number,
+): T[] {
+  const currentIndex = items.findIndex((item) => item.id === followUpId);
+  if (currentIndex < 0) {
+    return [...items];
+  }
+
+  const nextItems = [...items];
+  const [item] = nextItems.splice(currentIndex, 1);
+  if (!item) {
+    return [...items];
+  }
+
+  const boundedIndex = Math.max(0, Math.min(targetIndex, nextItems.length));
+  nextItems.splice(boundedIndex, 0, item);
+  return nextItems;
+}
 
 function useThreadPlanCatalog(threadIds: readonly ThreadId[]): ThreadPlanCatalogEntry[] {
   return useStore(
@@ -603,6 +824,7 @@ export default function ChatView(props: ChatViewProps) {
     routeKind === "server" ? store.threadLastVisitedAtById[routeThreadKey] : undefined,
   );
   const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -625,13 +847,13 @@ export default function ChatView(props: ChatViewProps) {
   );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
-  const setComposerDraftTerminalContexts = useComposerDraftStore(
-    (store) => store.setTerminalContexts,
-  );
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
+  );
+  const setComposerDraftTerminalContexts = useComposerDraftStore(
+    (store) => store.setTerminalContexts,
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
@@ -649,6 +871,11 @@ export default function ChatView(props: ChatViewProps) {
         ? store.getDraftSession(draftId)
         : null,
   );
+  const [persistedQueuedFollowUps, setPersistedQueuedFollowUps] = useLocalStorage(
+    queuedFollowUpsStorageKey(routeThreadRef),
+    [] as PersistedQueuedFollowUpDraft[],
+    PersistedQueuedFollowUpDraftListSchema,
+  );
   const promptRef = useRef("");
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
@@ -657,6 +884,12 @@ export default function ChatView(props: ChatViewProps) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
+  const [queuedFollowUps, setQueuedFollowUps] = useState<QueuedFollowUpDraft[]>(() =>
+    persistedQueuedFollowUps.flatMap((followUp) => {
+      const hydrated = hydrateQueuedFollowUpDraft(followUp);
+      return hydrated ? [hydrated] : [];
+    }),
+  );
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
@@ -668,6 +901,11 @@ export default function ChatView(props: ChatViewProps) {
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
   >([]);
+  const [homeThreadRoutingDecisionsByThreadId, setHomeThreadRoutingDecisionsByThreadId] = useState<
+    Record<string, HomeThreadRoutingDecision>
+  >({});
+  const [pendingHomeThreadRoutingPrompt, setPendingHomeThreadRoutingPrompt] =
+    useState<LocalHomeRoutingPrompt | null>(null);
   const [pendingUserInputAnswersByRequestId, setPendingUserInputAnswersByRequestId] = useState<
     Record<string, Record<string, PendingUserInputDraftAnswer>>
   >({});
@@ -698,7 +936,24 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const onSendRef = useRef<
+    | ((
+        e?: { preventDefault: () => void },
+        options?: { followUpBehaviorOverride?: "steer" | "queue" },
+      ) => Promise<void>)
+    | null
+  >(null);
+  const queueDispatchInFlightRef = useRef(false);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setQueuedFollowUps(
+      persistedQueuedFollowUps.flatMap((followUp) => {
+        const hydrated = hydrateQueuedFollowUpDraft(followUp);
+        return hydrated ? [hydrated] : [];
+      }),
+    );
+  }, [persistedQueuedFollowUps]);
 
   const terminalState = useTerminalStateStore((state) =>
     selectThreadTerminalState(state.terminalStateByThreadKey, routeThreadRef),
@@ -825,6 +1080,9 @@ export default function ChatView(props: ChatViewProps) {
   const activeProject = useStore(
     useMemo(() => createProjectSelectorByRef(activeProjectRef), [activeProjectRef]),
   );
+  const workspaceQuery = useQuery(workspaceDiscoverQueryOptions());
+  const activeProjectIsHome =
+    activeProject !== undefined && activeProject.cwd === (workspaceQuery.data?.homeDir ?? "");
 
   useEffect(() => {
     if (routeKind !== "server") {
@@ -1043,9 +1301,30 @@ export default function ChatView(props: ChatViewProps) {
     () => derivePendingApprovals(threadActivities),
     [threadActivities],
   );
-  const pendingUserInputs = useMemo(
+  const providerPendingUserInputs = useMemo(
     () => derivePendingUserInputs(threadActivities),
     [threadActivities],
+  );
+  const pendingHomeRoutingUserInput = useMemo(() => {
+    if (
+      !activeThread ||
+      !pendingHomeThreadRoutingPrompt ||
+      pendingHomeThreadRoutingPrompt.threadId !== activeThread.id
+    ) {
+      return null;
+    }
+
+    return buildHomeThreadRoutingPendingUserInput({
+      requestId: pendingHomeThreadRoutingPrompt.requestId,
+      createdAt: pendingHomeThreadRoutingPrompt.createdAt,
+    });
+  }, [activeThread, pendingHomeThreadRoutingPrompt]);
+  const pendingUserInputs = useMemo(
+    () =>
+      pendingHomeRoutingUserInput
+        ? [pendingHomeRoutingUserInput, ...providerPendingUserInputs]
+        : providerPendingUserInputs,
+    [pendingHomeRoutingUserInput, providerPendingUserInputs],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
@@ -2287,10 +2566,13 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const onSend = async (
+    e?: { preventDefault: () => void },
+    options?: { followUpBehaviorOverride?: "steer" | "queue" },
+  ) => {
     e?.preventDefault();
     const api = readEnvironmentApi(environmentId);
-    if (!api || !activeThread || isSendBusy || isConnecting || sendInFlightRef.current) return;
+    if (!api || !activeThread || isConnecting || sendInFlightRef.current) return;
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -2356,9 +2638,80 @@ export default function ChatView(props: ChatViewProps) {
       }
       return;
     }
+    if (phase === "running") {
+      const followUpBehavior = options?.followUpBehaviorOverride ?? settings.followUpBehavior;
+      const queuedFollowUp: QueuedFollowUpDraft = {
+        id: crypto.randomUUID(),
+        prompt: promptForSend,
+        images: composerImages.map(cloneComposerImageForRetry),
+        terminalContexts: [...sendableComposerTerminalContexts],
+        modelSelection: ctxSelectedModelSelection,
+        runtimeMode,
+        interactionMode,
+      };
+      const persistedQueuedFollowUp = await persistQueuedFollowUpDraft(queuedFollowUp);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      setQueuedFollowUps((existing) => [...existing, queuedFollowUp]);
+      setPersistedQueuedFollowUps((existing) => [...existing, persistedQueuedFollowUp]);
+      toastManager.add({
+        type: "info",
+        title: followUpBehavior === "steer" ? "Follow-up steering" : "Follow-up queued",
+        description:
+          followUpBehavior === "steer"
+            ? "The active turn will be interrupted, then your follow-up will send."
+            : "Your follow-up will send after the current turn finishes.",
+      });
+      if (followUpBehavior === "steer") {
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.interrupt",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      return;
+    }
+    if (isSendBusy) return;
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    const homeThreadRoutingDecision = homeThreadRoutingDecisionsByThreadId[threadIdForSend];
+    if (
+      isLocalDraftThread &&
+      activeProjectIsHome &&
+      isFirstMessage &&
+      homeThreadRoutingDecision === undefined &&
+      (!pendingHomeThreadRoutingPrompt ||
+        pendingHomeThreadRoutingPrompt.threadId !== threadIdForSend)
+    ) {
+      const requestId = makeHomeThreadRoutingRequestId(threadIdForSend);
+      setPendingHomeThreadRoutingPrompt({
+        threadId: threadIdForSend,
+        requestId,
+        createdAt: new Date().toISOString(),
+        autoSendOnResolve: true,
+      });
+      setPendingUserInputAnswersByRequestId((existing) =>
+        requestId in existing
+          ? existing
+          : {
+              ...existing,
+              [requestId]: {},
+            },
+      );
+      setPendingUserInputQuestionIndexByRequestId((existing) =>
+        requestId in existing
+          ? existing
+          : {
+              ...existing,
+              [requestId]: 0,
+            },
+      );
+      scheduleComposerFocus();
+      return;
+    }
     const baseBranchForWorktree =
       isFirstMessage && envMode === "worktree" && !activeThread.worktreePath
         ? activeThread.branch
@@ -2496,13 +2849,30 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       const turnAttachments = await turnAttachmentsPromise;
+      const bootstrapProjectId =
+        isLocalDraftThread && activeProjectIsHome && homeThreadRoutingDecision === "project"
+          ? newProjectId()
+          : activeProject.id;
       const bootstrap =
         isLocalDraftThread || baseBranchForWorktree
           ? {
+              ...(isLocalDraftThread &&
+              activeProjectIsHome &&
+              homeThreadRoutingDecision === "project"
+                ? {
+                    createProject: {
+                      projectId: bootstrapProjectId,
+                      title,
+                      folderName: sanitizeProjectFolderName(title),
+                      defaultModelSelection: threadCreateModelSelection,
+                      createdAt: messageCreatedAt,
+                    },
+                  }
+                : {}),
               ...(isLocalDraftThread
                 ? {
                     createThread: {
-                      projectId: activeProject.id,
+                      projectId: bootstrapProjectId,
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
@@ -2583,7 +2953,85 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
-  const onInterrupt = async () => {
+  onSendRef.current = onSend;
+
+  const toggleFollowUpBehavior = useCallback(() => {
+    updateSettings({
+      followUpBehavior: settings.followUpBehavior === "steer" ? "queue" : "steer",
+    });
+  }, [settings.followUpBehavior, updateSettings]);
+
+  const restoreQueuedFollowUpToComposer = useCallback(
+    (followUp: QueuedFollowUpDraft) => {
+      const retryImages = followUp.images.map(cloneComposerImageForRetry);
+      promptRef.current = followUp.prompt;
+      composerImagesRef.current = retryImages;
+      composerTerminalContextsRef.current = [...followUp.terminalContexts];
+      clearComposerDraftContent(composerDraftTarget);
+      setComposerDraftPrompt(composerDraftTarget, followUp.prompt);
+      setComposerDraftModelSelection(composerDraftTarget, followUp.modelSelection);
+      setComposerDraftRuntimeMode(composerDraftTarget, followUp.runtimeMode);
+      setComposerDraftInteractionMode(composerDraftTarget, followUp.interactionMode);
+      addComposerDraftImages(composerDraftTarget, retryImages);
+      setComposerDraftTerminalContexts(composerDraftTarget, [...followUp.terminalContexts]);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(followUp.prompt, followUp.prompt.length),
+        prompt: followUp.prompt,
+        detectTrigger: true,
+      });
+    },
+    [
+      addComposerDraftImages,
+      clearComposerDraftContent,
+      composerDraftTarget,
+      setComposerDraftInteractionMode,
+      setComposerDraftModelSelection,
+      setComposerDraftPrompt,
+      setComposerDraftRuntimeMode,
+      setComposerDraftTerminalContexts,
+    ],
+  );
+
+  const onDeleteQueuedFollowUp = useCallback(
+    (followUpId: string) => {
+      setQueuedFollowUps((existing) => existing.filter((followUp) => followUp.id !== followUpId));
+      setPersistedQueuedFollowUps((existing) =>
+        existing.filter((followUp) => followUp.id !== followUpId),
+      );
+    },
+    [setPersistedQueuedFollowUps],
+  );
+
+  const onReorderQueuedFollowUp = useCallback(
+    (followUpId: string, targetIndex: number) => {
+      setQueuedFollowUps((existing) => reorderById(existing, followUpId, targetIndex));
+      setPersistedQueuedFollowUps((existing) => reorderById(existing, followUpId, targetIndex));
+    },
+    [setPersistedQueuedFollowUps],
+  );
+
+  const onEditQueuedFollowUp = useCallback(
+    (followUpId: string) => {
+      const followUp = queuedFollowUps.find((entry) => entry.id === followUpId);
+      if (!followUp) {
+        return;
+      }
+      setQueuedFollowUps((existing) => existing.filter((entry) => entry.id !== followUpId));
+      setPersistedQueuedFollowUps((existing) =>
+        existing.filter((entry) => entry.id !== followUpId),
+      );
+      restoreQueuedFollowUpToComposer(followUp);
+      scheduleComposerFocus();
+    },
+    [
+      queuedFollowUps,
+      restoreQueuedFollowUpToComposer,
+      scheduleComposerFocus,
+      setPersistedQueuedFollowUps,
+    ],
+  );
+
+  const onInterrupt = useCallback(async () => {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
     await api.orchestration.dispatchCommand({
@@ -2592,7 +3040,86 @@ export default function ChatView(props: ChatViewProps) {
       threadId: activeThread.id,
       createdAt: new Date().toISOString(),
     });
-  };
+  }, [activeThread, environmentId]);
+
+  const onSteerQueuedFollowUp = useCallback(
+    async (followUpId: string) => {
+      const followUp = queuedFollowUps.find((entry) => entry.id === followUpId);
+      if (!followUp) {
+        return;
+      }
+
+      setQueuedFollowUps((existing) => {
+        return reorderById(existing, followUpId, 0);
+      });
+      setPersistedQueuedFollowUps((existing) => reorderById(existing, followUpId, 0));
+
+      toastManager.add({
+        type: "info",
+        title: "Queued follow-up promoted",
+        description:
+          phase === "running"
+            ? `“${truncate(describeQueuedFollowUp(followUp))}” will send next after the current run stops.`
+            : `“${truncate(describeQueuedFollowUp(followUp))}” will send next.`,
+      });
+
+      if (phase === "running") {
+        await onInterrupt();
+      }
+    },
+    [onInterrupt, phase, queuedFollowUps, setPersistedQueuedFollowUps],
+  );
+
+  useEffect(() => {
+    if (
+      queuedFollowUps.length === 0 ||
+      !activeThread ||
+      phase === "running" ||
+      isConnecting ||
+      isSendBusy ||
+      sendInFlightRef.current ||
+      queueDispatchInFlightRef.current ||
+      activePendingProgress
+    ) {
+      return;
+    }
+
+    const currentComposerState = deriveComposerSendState({
+      prompt: promptRef.current,
+      imageCount: composerImagesRef.current.length,
+      terminalContexts: composerTerminalContextsRef.current,
+    });
+    if (currentComposerState.hasSendableContent) {
+      return;
+    }
+
+    const nextFollowUp = queuedFollowUps[0];
+    if (!nextFollowUp) {
+      return;
+    }
+
+    queueDispatchInFlightRef.current = true;
+    restoreQueuedFollowUpToComposer(nextFollowUp);
+    setQueuedFollowUps((existing) => existing.slice(1));
+    setPersistedQueuedFollowUps((existing) => existing.slice(1));
+
+    queueMicrotask(() => {
+      queueDispatchInFlightRef.current = false;
+      const send = onSendRef.current;
+      if (typeof send === "function") {
+        void send();
+      }
+    });
+  }, [
+    activePendingProgress,
+    activeThread,
+    isConnecting,
+    isSendBusy,
+    phase,
+    queuedFollowUps,
+    restoreQueuedFollowUpToComposer,
+    setPersistedQueuedFollowUps,
+  ]);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -2624,6 +3151,49 @@ export default function ChatView(props: ChatViewProps) {
 
   const onRespondToUserInput = useCallback(
     async (requestId: ApprovalRequestId, answers: Record<string, unknown>) => {
+      if (
+        pendingHomeThreadRoutingPrompt &&
+        requestId === pendingHomeThreadRoutingPrompt.requestId
+      ) {
+        const decision = parseHomeThreadRoutingDecision(answers);
+        if (!decision) {
+          return;
+        }
+
+        setHomeThreadRoutingDecisionsByThreadId((existing) => ({
+          ...existing,
+          [pendingHomeThreadRoutingPrompt.threadId]: decision,
+        }));
+        setPendingHomeThreadRoutingPrompt(null);
+        setPendingUserInputAnswersByRequestId((existing) => {
+          if (!(requestId in existing)) {
+            return existing;
+          }
+          const next = { ...existing };
+          delete next[requestId];
+          return next;
+        });
+        setPendingUserInputQuestionIndexByRequestId((existing) => {
+          if (!(requestId in existing)) {
+            return existing;
+          }
+          const next = { ...existing };
+          delete next[requestId];
+          return next;
+        });
+        setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+
+        if (pendingHomeThreadRoutingPrompt.autoSendOnResolve) {
+          window.setTimeout(() => {
+            const send = onSendRef.current;
+            if (typeof send === "function") {
+              void send();
+            }
+          }, 0);
+        }
+        return;
+      }
+
       const api = readEnvironmentApi(environmentId);
       if (!api || !activeThreadId) return;
 
@@ -2647,7 +3217,7 @@ export default function ChatView(props: ChatViewProps) {
         });
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
     },
-    [activeThreadId, environmentId, setThreadError],
+    [activeThreadId, environmentId, pendingHomeThreadRoutingPrompt, setThreadError],
   );
 
   const setActivePendingUserInputQuestionIndex = useCallback(
@@ -3052,14 +3622,45 @@ export default function ChatView(props: ChatViewProps) {
         nextModelSelection,
       );
       setStickyComposerModelSelection(nextModelSelection);
+      if (!isLocalDraftThread) {
+        const api = readEnvironmentApi(activeThread.environmentId);
+        if (api) {
+          void api.orchestration
+            .dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: activeThread.id,
+              modelSelection: nextModelSelection,
+            })
+            .then(() => {
+              toastManager.add({
+                type: "info",
+                title: phase === "running" ? "Model switch queued" : "Model updated",
+                description:
+                  phase === "running"
+                    ? `${resolvedModel} will apply after the current run settles or is interrupted.`
+                    : `${resolvedModel} will be used for the next turn in this thread.`,
+              });
+            })
+            .catch((error: unknown) => {
+              setThreadError(
+                activeThread.id,
+                error instanceof Error ? error.message : "Failed to update the thread model.",
+              );
+            });
+        }
+      }
       scheduleComposerFocus();
     },
     [
       activeThread,
+      isLocalDraftThread,
       lockedProvider,
+      phase,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
+      setThreadError,
       providerStatuses,
       settings,
     ],
@@ -3227,6 +3828,15 @@ export default function ChatView(props: ChatViewProps) {
 
           {/* Input bar */}
           <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
+            <ComposerQueuedFollowUpsPanel
+              queuedFollowUps={queuedFollowUps}
+              onDelete={onDeleteQueuedFollowUp}
+              onEdit={onEditQueuedFollowUp}
+              onReorder={onReorderQueuedFollowUp}
+              onSteer={(followUpId) => {
+                void onSteerQueuedFollowUp(followUpId);
+              }}
+            />
             <ChatComposer
               ref={composerRef}
               composerDraftTarget={composerDraftTarget}
@@ -3267,6 +3877,7 @@ export default function ChatView(props: ChatViewProps) {
               resolvedTheme={resolvedTheme}
               settings={settings}
               gitCwd={gitCwd}
+              queuedFollowUpCount={queuedFollowUps.length}
               promptRef={promptRef}
               composerImagesRef={composerImagesRef}
               composerTerminalContextsRef={composerTerminalContextsRef}
@@ -3274,6 +3885,7 @@ export default function ChatView(props: ChatViewProps) {
               scheduleStickToBottom={scrollToEnd}
               onSend={onSend}
               onInterrupt={onInterrupt}
+              onToggleFollowUpBehavior={toggleFollowUpBehavior}
               onImplementPlanInNewThread={onImplementPlanInNewThread}
               onRespondToApproval={onRespondToApproval}
               onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}

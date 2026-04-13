@@ -59,6 +59,14 @@
     "./qrCode": {
       "types": "./src/qrCode.ts",
       "import": "./src/qrCode.ts"
+    },
+    "./scheduler": {
+      "types": "./src/scheduler.ts",
+      "import": "./src/scheduler.ts"
+    },
+    "./homeProject": {
+      "types": "./src/homeProject.ts",
+      "import": "./src/homeProject.ts"
     }
   },
   "scripts": {

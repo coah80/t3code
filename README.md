@@ -1,6 +1,6 @@
-# T3 Code
+# CoahCode
 
-T3 Code is a minimal web GUI for coding agents (currently Codex and Claude, more coming soon).
+CoahCode is a fork of [T3 Code](https://github.com/pingdotgg/t3code) with a Cursor-style harness layer, MCP support, LSP integration, scheduled runs, steering, and related agent UX work on top of the original app.
 
 ## Installation
 

@@ -1,11 +1,5 @@
-import {
-  FolderIcon,
-  FolderPlusIcon,
-  GitBranchIcon,
-  HomeIcon,
-  SearchIcon,
-} from "lucide-react";
-import { useMemo, useState } from "react";
+import { FolderIcon, FolderPlusIcon, HomeIcon, SearchIcon } from "lucide-react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceProject } from "@t3tools/contracts";
 import {
@@ -31,13 +25,13 @@ export function WorkspacePicker({ currentWorkspace }: WorkspacePickerProps) {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
 
-  const filtered = useMemo(() => {
+  const filtered = (() => {
     if (!search) return projects;
     const lower = search.toLowerCase();
     return projects.filter(
       (p) => p.name.toLowerCase().includes(lower) || p.path.toLowerCase().includes(lower),
     );
-  }, [projects, search]);
+  })();
 
   const handleCreate = () => {
     if (!newName.trim()) return;

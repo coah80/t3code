@@ -45,6 +45,13 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "your-claude-model-slug",
     example: "claude-sonnet-5-0",
   },
+  harness: {
+    provider: "harness",
+    title: "CoahCode Harness",
+    description: "Save additional harness model slugs with an upstream prefix like `anthropic/`.",
+    placeholder: "provider/model-slug",
+    example: "anthropic/claude-sonnet-4-6",
+  },
 };
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
@@ -164,6 +171,12 @@ export function getCustomModelOptionsByProvider(
       providers,
       "claudeAgent",
       selectedProvider === "claudeAgent" ? selectedModel : undefined,
+    ),
+    harness: getAppModelOptions(
+      settings,
+      providers,
+      "harness",
+      selectedProvider === "harness" ? selectedModel : undefined,
     ),
   };
 }

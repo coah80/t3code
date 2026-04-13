@@ -1,5 +1,5 @@
 import { parseScopedThreadKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
-import { type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { type ScopedProjectRef, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback } from "react";
@@ -88,6 +88,51 @@ export function useThreadActions() {
       threadId: target.threadId,
     });
   }, []);
+
+  const moveThread = useCallback(
+    async (
+      target: ScopedThreadRef,
+      destination: {
+        environmentId: ScopedProjectRef["environmentId"];
+        projectId: ScopedProjectRef["projectId"];
+      },
+    ) => {
+      if (target.environmentId !== destination.environmentId) {
+        throw new Error("Threads can only be moved within the same environment.");
+      }
+
+      const api = readEnvironmentApi(target.environmentId);
+      if (!api) {
+        throw new Error("Thread API unavailable.");
+      }
+
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) {
+        throw new Error("Thread not found.");
+      }
+
+      const targetProject = selectProjectByRef(useStore.getState(), destination);
+      if (!targetProject) {
+        throw new Error("Destination project not found.");
+      }
+
+      if (resolved.thread.projectId === destination.projectId) {
+        return;
+      }
+
+      if (resolved.thread.session?.status === "running" && resolved.thread.session.activeTurnId) {
+        throw new Error("Stop the active turn before moving this thread.");
+      }
+
+      await api.orchestration.dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId: target.threadId,
+        projectId: destination.projectId,
+      });
+    },
+    [resolveThreadTarget],
+  );
 
   const deleteThread = useCallback(
     async (target: ScopedThreadRef, opts: { deletedThreadKeys?: ReadonlySet<string> } = {}) => {
@@ -267,6 +312,7 @@ export function useThreadActions() {
   return {
     archiveThread,
     unarchiveThread,
+    moveThread,
     deleteThread,
     confirmAndDeleteThread,
   };

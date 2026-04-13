@@ -77,6 +77,10 @@ import {
 import { ServerLifecycleEvents, type ServerLifecycleEventsShape } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup, type ServerRuntimeStartupShape } from "./serverRuntimeStartup.ts";
 import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings.ts";
+import {
+  ScheduledTasksService,
+  type ScheduledTasksShape,
+} from "./scheduledTasks/Services/ScheduledTasks.ts";
 import { TerminalManager, type TerminalManagerShape } from "./terminal/Services/Manager.ts";
 import {
   BrowserTraceCollector,
@@ -290,6 +294,7 @@ const buildAppUnderTest = (options?: {
     keybindings?: Partial<KeybindingsShape>;
     providerRegistry?: Partial<ProviderRegistryShape>;
     serverSettings?: Partial<ServerSettingsShape>;
+    scheduledTasks?: Partial<ScheduledTasksShape>;
     open?: Partial<OpenShape>;
     gitCore?: Partial<GitCoreShape>;
     gitManager?: Partial<GitManagerShape>;
@@ -373,6 +378,21 @@ const buildAppUnderTest = (options?: {
           updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
           streamChanges: Stream.empty,
           ...options?.layers?.serverSettings,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ScheduledTasksService)({
+          list: Effect.succeed([]),
+          create: (input) =>
+            Effect.succeed({
+              id: "scheduled-task-1",
+              enabled: true,
+              ...input,
+            }),
+          markRun: () => Effect.succeed(true),
+          remove: () => Effect.succeed(false),
+          toggle: () => Effect.succeed(null),
+          ...options?.layers?.scheduledTasks,
         }),
       ),
       Layer.provide(

@@ -59,6 +59,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onInterrupt,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
+  const showInterruptButton = isRunning && !hasSendableContent;
+
   if (pendingAction) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
@@ -106,7 +108,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (isRunning) {
+  if (showInterruptButton) {
     return (
       <button
         type="button"
@@ -184,7 +186,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             ? "Preparing worktree"
             : isSendBusy
               ? "Sending"
-              : "Send message"
+              : isRunning
+                ? "Send follow-up"
+                : "Send message"
       }
     >
       {isConnecting || isSendBusy ? (

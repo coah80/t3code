@@ -60,6 +60,7 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./ProviderModelPicker";
+import { ModelSwitcher } from "./ModelSwitcher";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
@@ -76,6 +77,7 @@ import {
 } from "./composerProviderRegistry";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
+import { SteeringIndicator } from "./SteeringIndicator";
 import { basenameOfPath } from "../../vscode-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
@@ -399,6 +401,7 @@ export interface ChatComposerProps {
   resolvedTheme: "light" | "dark";
   settings: UnifiedSettings;
   gitCwd: string | null;
+  queuedFollowUpCount: number;
 
   // Refs the parent needs kept in sync
   promptRef: React.MutableRefObject<string>;
@@ -410,8 +413,12 @@ export interface ChatComposerProps {
   scheduleStickToBottom: () => void;
 
   // Callbacks
-  onSend: (e?: { preventDefault: () => void }) => void;
+  onSend: (
+    e?: { preventDefault: () => void },
+    options?: { followUpBehaviorOverride?: "steer" | "queue" },
+  ) => void;
   onInterrupt: () => void;
+  onToggleFollowUpBehavior: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
@@ -485,6 +492,7 @@ export const ChatComposer = memo(
       resolvedTheme,
       settings,
       gitCwd,
+      queuedFollowUpCount,
       promptRef,
       composerImagesRef,
       composerTerminalContextsRef,
@@ -492,6 +500,7 @@ export const ChatComposer = memo(
       scheduleStickToBottom,
       onSend,
       onInterrupt,
+      onToggleFollowUpBehavior,
       onImplementPlanInNewThread,
       onRespondToApproval,
       onSelectActivePendingUserInputOption,
@@ -597,6 +606,7 @@ export const ChatComposer = memo(
         codex: providerStatuses.find((provider) => provider.provider === "codex")?.models ?? [],
         claudeAgent:
           providerStatuses.find((provider) => provider.provider === "claudeAgent")?.models ?? [],
+        harness: providerStatuses.find((provider) => provider.provider === "harness")?.models ?? [],
       }),
       [providerStatuses],
     );
@@ -1493,6 +1503,12 @@ export const ChatComposer = memo(
           return true;
         }
       }
+      if (key === "Enter" && event.shiftKey && (event.metaKey || event.ctrlKey)) {
+        void onSend(undefined, {
+          followUpBehaviorOverride: settings.followUpBehavior === "steer" ? "queue" : "steer",
+        });
+        return true;
+      }
       if (key === "Enter" && !event.shiftKey) {
         void onSend();
         return true;
@@ -1903,21 +1919,30 @@ export const ChatComposer = memo(
                 )}
               >
                 <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  <ProviderModelPicker
-                    compact={isComposerFooterCompact}
-                    provider={selectedProvider}
-                    model={selectedModelForPickerWithCustomFallback}
-                    lockedProvider={lockedProvider}
-                    providers={providerStatuses}
-                    modelOptionsByProvider={modelOptionsByProvider}
-                    {...(composerProviderState.modelPickerIconClassName
-                      ? {
-                          activeProviderIconClassName:
-                            composerProviderState.modelPickerIconClassName,
-                        }
-                      : {})}
-                    onProviderModelChange={onProviderModelSelect}
-                  />
+                  {selectedProvider === "harness" ? (
+                    <ModelSwitcher
+                      currentModel={selectedModelForPickerWithCustomFallback}
+                      isRunning={phase === "running"}
+                      models={selectedProviderModels}
+                      onSwitch={(modelId) => onProviderModelSelect("harness", modelId)}
+                    />
+                  ) : (
+                    <ProviderModelPicker
+                      compact={isComposerFooterCompact}
+                      provider={selectedProvider}
+                      model={selectedModelForPickerWithCustomFallback}
+                      lockedProvider={lockedProvider}
+                      providers={providerStatuses}
+                      modelOptionsByProvider={modelOptionsByProvider}
+                      {...(composerProviderState.modelPickerIconClassName
+                        ? {
+                            activeProviderIconClassName:
+                              composerProviderState.modelPickerIconClassName,
+                          }
+                        : {})}
+                      onProviderModelChange={onProviderModelSelect}
+                    />
+                  )}
 
                   {isComposerFooterCompact ? (
                     <CompactComposerControlsMenu
@@ -1962,16 +1987,12 @@ export const ChatComposer = memo(
                   }
                   className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
                 >
-                  {phase === "running" && (
-                    <button
-                      type="button"
-                      className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
-                      title="Follow-up will steer the active run (Cmd+Shift+Enter to queue instead)"
-                    >
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>
-                      Steer
-                    </button>
-                  )}
+                  <SteeringIndicator
+                    behavior={settings.followUpBehavior}
+                    queueCount={queuedFollowUpCount}
+                    isRunning={phase === "running"}
+                    onToggleBehavior={onToggleFollowUpBehavior}
+                  />
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
                     activeContextWindow={activeContextWindow}

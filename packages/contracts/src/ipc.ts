@@ -206,6 +206,7 @@ export interface LocalApi {
   scheduledTasks: {
     list: () => Promise<{ tasks: readonly ScheduledTaskInfo[] }>;
     create: (input: ScheduledTaskCreateInput) => Promise<{ task: ScheduledTaskInfo }>;
+    update: (input: ScheduledTaskUpdateInput) => Promise<{ task: ScheduledTaskInfo | null }>;
     remove: (id: string) => Promise<{ ok: boolean; deleted: boolean }>;
     toggle: (id: string, enabled: boolean) => Promise<{ task: ScheduledTaskInfo | null }>;
   };
@@ -289,8 +290,8 @@ export interface ScheduledTaskInfo {
   readonly workspacePath: string;
   readonly model: string;
   readonly enabled: boolean;
-  readonly createdAt?: number;
-  readonly lastRun?: number;
+  readonly createdAt?: number | undefined;
+  readonly lastRun?: number | undefined;
 }
 
 export interface ScheduledTaskCreateInput {
@@ -301,8 +302,20 @@ export interface ScheduledTaskCreateInput {
   readonly model: string;
 }
 
+export interface ScheduledTaskUpdateInput {
+  readonly id: string;
+  readonly name?: string | undefined;
+  readonly prompt?: string | undefined;
+  readonly cronExpression?: string | undefined;
+  readonly workspacePath?: string | undefined;
+  readonly model?: string | undefined;
+  readonly enabled?: boolean | undefined;
+}
+
 export interface WorkspaceProject {
   readonly path: string;
   readonly name: string;
   readonly isHome: boolean;
+  readonly gitRemote?: string | undefined;
+  readonly lastAccessed?: number | undefined;
 }

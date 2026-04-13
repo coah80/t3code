@@ -1,15 +1,21 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectIcon } from "@t3tools/contracts";
 import { FolderIcon } from "lucide-react";
 import { useState } from "react";
 import { resolveEnvironmentHttpUrl } from "../environments/runtime";
+import { ProjectIconOverride } from "../projectIcons";
 
 const loadedProjectFaviconSrcs = new Set<string>();
 
 export function ProjectFavicon(input: {
   environmentId: EnvironmentId;
   cwd: string;
-  className?: string;
+  projectIcon?: ProjectIcon | null | undefined;
+  className?: string | undefined;
 }) {
+  if (input.projectIcon) {
+    return <ProjectIconOverride icon={input.projectIcon} className={input.className} />;
+  }
+
   const src = resolveEnvironmentHttpUrl({
     environmentId: input.environmentId,
     pathname: "/api/project-favicon",

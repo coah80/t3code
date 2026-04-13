@@ -220,6 +220,28 @@ export function buildExpiredTerminalContextToastCopy(
   };
 }
 
+export function describeQueuedFollowUp(input: {
+  prompt: string;
+  images: ReadonlyArray<unknown>;
+  terminalContexts: ReadonlyArray<TerminalContextDraft>;
+}): string {
+  const trimmedPrompt = stripInlineTerminalContextPlaceholders(input.prompt).trim();
+  if (trimmedPrompt.length > 0) {
+    return trimmedPrompt;
+  }
+  if (input.images.length > 0) {
+    return input.images.length === 1
+      ? "1 image attached"
+      : `${input.images.length} images attached`;
+  }
+  if (input.terminalContexts.length > 0) {
+    return input.terminalContexts.length === 1
+      ? (input.terminalContexts[0]?.terminalLabel ?? "1 terminal context")
+      : `${input.terminalContexts.length} terminal contexts`;
+  }
+  return "Follow-up";
+}
+
 export function threadHasStarted(thread: Thread | null | undefined): boolean {
   return Boolean(
     thread && (thread.latestTurn !== null || thread.messages.length > 0 || thread.session !== null),

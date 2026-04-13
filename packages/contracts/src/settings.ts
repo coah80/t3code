@@ -6,6 +6,7 @@ import {
   ClaudeModelOptions,
   CodexModelOptions,
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
+  HarnessModelOptions,
 } from "./model";
 import { ModelSelection } from "./orchestration";
 
@@ -23,10 +24,17 @@ export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
+export const FollowUpBehavior = Schema.Literals(["steer", "queue"]);
+export type FollowUpBehavior = typeof FollowUpBehavior.Type;
+export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
+
 export const ClientSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  followUpBehavior: FollowUpBehavior.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FOLLOW_UP_BEHAVIOR)),
+  ),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER)),
   ),
@@ -45,6 +53,8 @@ export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientS
 
 export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
 export type ThreadEnvMode = typeof ThreadEnvMode.Type;
+export const AssistantHarnessMode = Schema.Literals(["native", "coahcode"]);
+export type AssistantHarnessMode = typeof AssistantHarnessMode.Type;
 
 const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
@@ -73,6 +83,40 @@ export const ClaudeSettings = Schema.Struct({
 });
 export type ClaudeSettings = typeof ClaudeSettings.Type;
 
+export const HarnessMcpServerSettings = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  type: Schema.Literals(["local", "remote"]),
+  command: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  url: Schema.optionalKey(TrimmedString),
+  environment: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  timeout: Schema.optionalKey(Schema.Number),
+});
+export type HarnessMcpServerSettings = typeof HarnessMcpServerSettings.Type;
+
+export const HarnessLspServerSettings = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  extensions: Schema.Array(TrimmedNonEmptyString),
+  command: Schema.Array(TrimmedNonEmptyString),
+  rootMarkers: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+export type HarnessLspServerSettings = typeof HarnessLspServerSettings.Type;
+
+export const HarnessSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  customModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  mcpServers: Schema.Array(HarnessMcpServerSettings).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  enableBuiltinLsp: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  lspServers: Schema.Array(HarnessLspServerSettings).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+export type HarnessSettings = typeof HarnessSettings.Type;
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -81,6 +125,9 @@ export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  assistantHarnessMode: AssistantHarnessMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("coahcode" as const satisfies AssistantHarnessMode)),
+  ),
   defaultThreadEnvMode: ThreadEnvMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("local" as const satisfies ThreadEnvMode)),
   ),
@@ -97,6 +144,7 @@ export const ServerSettings = Schema.Struct({
   providers: Schema.Struct({
     codex: CodexSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    harness: HarnessSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
@@ -150,6 +198,11 @@ const ModelSelectionPatch = Schema.Union([
     model: Schema.optionalKey(TrimmedNonEmptyString),
     options: Schema.optionalKey(ClaudeModelOptionsPatch),
   }),
+  Schema.Struct({
+    provider: Schema.optionalKey(Schema.Literal("harness")),
+    model: Schema.optionalKey(TrimmedNonEmptyString),
+    options: Schema.optionalKey(HarnessModelOptions),
+  }),
 ]);
 
 const CodexSettingsPatch = Schema.Struct({
@@ -165,8 +218,17 @@ const ClaudeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const HarnessSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  mcpServers: Schema.optionalKey(Schema.Array(HarnessMcpServerSettings)),
+  enableBuiltinLsp: Schema.optionalKey(Schema.Boolean),
+  lspServers: Schema.optionalKey(Schema.Array(HarnessLspServerSettings)),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
+  assistantHarnessMode: Schema.optionalKey(AssistantHarnessMode),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   observability: Schema.optionalKey(
@@ -179,6 +241,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
+      harness: Schema.optionalKey(HarnessSettingsPatch),
     }),
   ),
 });

@@ -117,14 +117,15 @@ export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
       updateSettings: rpcClient.server.updateSettings,
     },
     scheduledTasks: {
-      list: async () => ({ tasks: [] }),
-      create: async (input) => ({ task: { id: crypto.randomUUID(), ...input, enabled: true } }),
-      remove: async () => ({ ok: true, deleted: true }),
-      toggle: async () => ({ task: null }),
+      list: rpcClient.scheduledTasks.list,
+      create: (input) => rpcClient.scheduledTasks.create(input),
+      update: (input) => rpcClient.scheduledTasks.update(input),
+      remove: (id) => rpcClient.scheduledTasks.remove({ id }),
+      toggle: (id, enabled) => rpcClient.scheduledTasks.toggle({ id, enabled }),
     },
     workspace: {
-      discover: async () => ({ projects: [], homeDir: "~" }),
-      create: async (name) => ({ project: { path: `~/Projects/${name}`, name, isHome: false } }),
+      discover: rpcClient.workspace.discover,
+      create: (name) => rpcClient.workspace.create({ name }),
     },
   };
 }

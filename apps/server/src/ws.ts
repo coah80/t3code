@@ -1,3 +1,4 @@
+import { promises as fs } from "node:fs";
 import { Cause, Effect, Layer, Option, Queue, Ref, Schema, Stream } from "effect";
 import {
   type AuthAccessStreamEvent,
@@ -28,6 +29,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
+import { createProject, discoverProjects } from "./harness/engine/home";
 import { GitCore } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
@@ -62,6 +64,7 @@ import {
   type SessionCredentialChange,
 } from "./auth/Services/SessionCredentialService";
 import { respondToAuthError } from "./auth/http";
+import { ScheduledTasksService } from "./scheduledTasks/Services/ScheduledTasks";
 
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
@@ -146,6 +149,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
       const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
+      const scheduledTasks = yield* ScheduledTasksService;
       const serverEnvironment = yield* ServerEnvironment;
       const serverAuth = yield* ServerAuth;
       const bootstrapCredentials = yield* BootstrapCredentialService;
@@ -302,10 +306,23 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
+          let createdProject = false;
           let createdThread = false;
-          let targetProjectId = bootstrap?.createThread?.projectId;
+          let targetProjectId =
+            bootstrap?.createThread?.projectId ?? bootstrap?.createProject?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+
+          const cleanupCreatedProject = () =>
+            createdProject && targetProjectId
+              ? orchestrationEngine
+                  .dispatch({
+                    type: "project.delete",
+                    commandId: serverCommandId("bootstrap-project-delete"),
+                    projectId: targetProjectId,
+                  })
+                  .pipe(Effect.ignoreCause({ log: true }))
+              : Effect.void;
 
           const cleanupCreatedThread = () =>
             createdThread
@@ -432,12 +449,31 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               : Effect.void;
 
           const bootstrapProgram = Effect.gen(function* () {
+            if (bootstrap?.createProject) {
+              const createProjectBootstrap = bootstrap.createProject;
+              const createdProjectWorkspace = yield* Effect.promise(() =>
+                createProject(createProjectBootstrap.folderName),
+              );
+              targetProjectId = createProjectBootstrap.projectId;
+              targetProjectCwd = createdProjectWorkspace.path;
+              yield* orchestrationEngine.dispatch({
+                type: "project.create",
+                commandId: serverCommandId("bootstrap-project-create"),
+                projectId: createProjectBootstrap.projectId,
+                title: createProjectBootstrap.title,
+                workspaceRoot: createdProjectWorkspace.path,
+                defaultModelSelection: createProjectBootstrap.defaultModelSelection,
+                createdAt: createProjectBootstrap.createdAt,
+              });
+              createdProject = true;
+            }
+
             if (bootstrap?.createThread) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.create",
                 commandId: serverCommandId("bootstrap-thread-create"),
                 threadId: command.threadId,
-                projectId: bootstrap.createThread.projectId,
+                projectId: targetProjectId ?? bootstrap.createThread.projectId,
                 title: bootstrap.createThread.title,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
@@ -477,7 +513,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               if (Cause.hasInterruptsOnly(cause)) {
                 return Effect.fail(dispatchError);
               }
-              return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+              return cleanupCreatedThread().pipe(
+                Effect.flatMap(() => cleanupCreatedProject()),
+                Effect.flatMap(() => Effect.fail(dispatchError)),
+              );
             }),
           );
         });
@@ -539,6 +578,8 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         gitStatusBroadcaster
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+
+      const homeDir = process.env.HOME ?? config.cwd;
 
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
@@ -731,6 +772,87 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(WS_METHODS.serverUpdateSettings, serverSettings.updateSettings(patch), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.scheduledTasksList]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksList,
+            scheduledTasks.list.pipe(
+              Effect.map((tasks) => ({ tasks })),
+              Effect.orDie,
+            ),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
+        [WS_METHODS.scheduledTasksCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksCreate,
+            scheduledTasks.create(input).pipe(
+              Effect.map((task) => ({ task })),
+              Effect.orDie,
+            ),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
+        [WS_METHODS.scheduledTasksUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksUpdate,
+            scheduledTasks.update(input).pipe(
+              Effect.map((task) => ({ task })),
+              Effect.orDie,
+            ),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
+        [WS_METHODS.scheduledTasksDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksDelete,
+            scheduledTasks.remove(input.id).pipe(
+              Effect.map((deleted) => ({ ok: true, deleted })),
+              Effect.orDie,
+            ),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
+        [WS_METHODS.scheduledTasksToggle]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksToggle,
+            scheduledTasks.toggle(input.id, input.enabled).pipe(
+              Effect.map((task) => ({ task })),
+              Effect.orDie,
+            ),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
+        [WS_METHODS.workspaceDiscover]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceDiscover,
+            Effect.promise(async () => ({
+              projects: await discoverProjects(),
+              homeDir,
+            })).pipe(Effect.orDie),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceCreate,
+            Effect.promise(async () => ({
+              project: await createProject(input.name),
+            })).pipe(Effect.orDie),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceSwitch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceSwitch,
+            Effect.promise(async () => {
+              try {
+                await fs.stat(input.path);
+                return {
+                  ok: true,
+                  path: input.path,
+                };
+              } catch {
+                return {
+                  ok: false,
+                  path: input.path,
+                };
+              }
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsSearchEntries,

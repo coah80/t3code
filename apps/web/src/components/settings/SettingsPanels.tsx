@@ -18,11 +18,12 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import { DEFAULT_UNIFIED_SETTINGS, type AssistantHarnessMode } from "@t3tools/contracts/settings";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Equal } from "effect";
 import { APP_VERSION } from "../../branding";
 import { ScheduledTasks } from "../ScheduledTasks";
+import { WorkspacePicker } from "../WorkspacePicker";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
@@ -104,6 +105,7 @@ type InstallProviderSettings = {
   title: string;
   binaryPlaceholder: string;
   binaryDescription: ReactNode;
+  showBinaryPath?: boolean;
   homePathKey?: "codexHomePath";
   homePlaceholder?: string;
   homeDescription?: ReactNode;
@@ -124,6 +126,14 @@ const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     title: "Claude",
     binaryPlaceholder: "Claude binary path",
     binaryDescription: "Path to the Claude binary",
+  },
+  {
+    provider: "harness",
+    title: "CoahCode Runtime",
+    binaryPlaceholder: "",
+    binaryDescription:
+      "Configures MCP, LSP, skills, and the CoahCode runtime backend used behind Claude and Codex.",
+    showBinaryPath: false,
   },
 ] as const;
 
@@ -197,6 +207,14 @@ function getProviderSummary(provider: ServerProvider | undefined) {
 function getProviderVersionLabel(version: string | null | undefined) {
   if (!version) return null;
   return version.startsWith("v") ? version : `v${version}`;
+}
+
+function splitCommandInput(value: string): string[] {
+  const matches = value.match(/"([^"\\]|\\.)*"|'([^'\\]|\\.)*'|\S+/g) ?? [];
+  return matches
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => part.replace(/^['"]|['"]$/g, ""));
 }
 
 function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }) {
@@ -443,16 +461,31 @@ export function GeneralSettingsPanel() {
         DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.binaryPath ||
       settings.providers.claudeAgent.customModels.length > 0,
     ),
+    harness: Boolean(settings.providers.harness.customModels.length > 0),
   });
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
     codex: "",
     claudeAgent: "",
+    harness: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
   >({});
+  const [newHarnessMcp, setNewHarnessMcp] = useState({
+    name: "",
+    type: "local" as const,
+    target: "",
+  });
+  const [newHarnessMcpError, setNewHarnessMcpError] = useState<string | null>(null);
+  const [newHarnessLsp, setNewHarnessLsp] = useState({
+    id: "",
+    extensions: "",
+    command: "",
+    rootMarkers: "",
+  });
+  const [newHarnessLspError, setNewHarnessLspError] = useState<string | null>(null);
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const refreshingRef = useRef(false);
   const modelListRefs = useRef<Partial<Record<ProviderKind, HTMLDivElement | null>>>({});
@@ -639,6 +672,165 @@ export function GeneralSettingsPanel() {
     [settings, updateSettings],
   );
 
+  const addHarnessMcpServer = useCallback(() => {
+    const name = newHarnessMcp.name.trim();
+    const target = newHarnessMcp.target.trim();
+    if (!name) {
+      setNewHarnessMcpError("Enter a server name.");
+      return;
+    }
+    if (!target) {
+      setNewHarnessMcpError(
+        newHarnessMcp.type === "local" ? "Enter a command." : "Enter a server URL.",
+      );
+      return;
+    }
+
+    const nextServer =
+      newHarnessMcp.type === "local"
+        ? {
+            name,
+            type: "local" as const,
+            command: splitCommandInput(target),
+            enabled: true,
+          }
+        : {
+            name,
+            type: "remote" as const,
+            url: target,
+            enabled: true,
+          };
+
+    if (settings.providers.harness.mcpServers.some((server) => server.name === nextServer.name)) {
+      setNewHarnessMcpError("That MCP server name is already saved.");
+      return;
+    }
+
+    if (
+      newHarnessMcp.type === "local" &&
+      (!("command" in nextServer) || nextServer.command.length === 0)
+    ) {
+      setNewHarnessMcpError("Enter a valid command.");
+      return;
+    }
+
+    updateSettings({
+      providers: {
+        ...settings.providers,
+        harness: {
+          ...settings.providers.harness,
+          mcpServers: [...settings.providers.harness.mcpServers, nextServer],
+        },
+      },
+    });
+    setNewHarnessMcp({ name: "", type: "local", target: "" });
+    setNewHarnessMcpError(null);
+  }, [newHarnessMcp, settings.providers, updateSettings]);
+
+  const removeHarnessMcpServer = useCallback(
+    (name: string) => {
+      updateSettings({
+        providers: {
+          ...settings.providers,
+          harness: {
+            ...settings.providers.harness,
+            mcpServers: settings.providers.harness.mcpServers.filter(
+              (server) => server.name !== name,
+            ),
+          },
+        },
+      });
+    },
+    [settings.providers, updateSettings],
+  );
+
+  const toggleHarnessMcpServer = useCallback(
+    (name: string, enabled: boolean) => {
+      updateSettings({
+        providers: {
+          ...settings.providers,
+          harness: {
+            ...settings.providers.harness,
+            mcpServers: settings.providers.harness.mcpServers.map((server) =>
+              server.name === name ? { ...server, enabled } : server,
+            ),
+          },
+        },
+      });
+    },
+    [settings.providers, updateSettings],
+  );
+
+  const addHarnessLspServer = useCallback(() => {
+    const id = newHarnessLsp.id.trim();
+    const extensions = newHarnessLsp.extensions
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    const command = splitCommandInput(newHarnessLsp.command);
+    const rootMarkers = newHarnessLsp.rootMarkers
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+
+    if (!id) {
+      setNewHarnessLspError("Enter an LSP server id.");
+      return;
+    }
+    if (extensions.length === 0) {
+      setNewHarnessLspError("Enter at least one file extension.");
+      return;
+    }
+    if (command.length === 0) {
+      setNewHarnessLspError("Enter a command.");
+      return;
+    }
+    if (settings.providers.harness.lspServers.some((server) => server.id === id)) {
+      setNewHarnessLspError("That LSP server id is already saved.");
+      return;
+    }
+
+    updateSettings({
+      providers: {
+        ...settings.providers,
+        harness: {
+          ...settings.providers.harness,
+          lspServers: [
+            ...settings.providers.harness.lspServers,
+            {
+              id,
+              extensions,
+              command,
+              rootMarkers,
+            },
+          ],
+        },
+      },
+    });
+    setNewHarnessLsp({
+      id: "",
+      extensions: "",
+      command: "",
+      rootMarkers: "",
+    });
+    setNewHarnessLspError(null);
+  }, [newHarnessLsp, settings.providers, updateSettings]);
+
+  const removeHarnessLspServer = useCallback(
+    (id: string) => {
+      updateSettings({
+        providers: {
+          ...settings.providers,
+          harness: {
+            ...settings.providers.harness,
+            lspServers: settings.providers.harness.lspServers.filter((server) => server.id !== id),
+          },
+        },
+      });
+    },
+    [settings.providers, updateSettings],
+  );
+
   const providerCards = PROVIDER_SETTINGS.map((providerSettings) => {
     const liveProvider = serverProviders.find(
       (candidate) => candidate.provider === providerSettings.provider,
@@ -661,10 +853,11 @@ export function GeneralSettingsPanel() {
       title: providerSettings.title,
       binaryPlaceholder: providerSettings.binaryPlaceholder,
       binaryDescription: providerSettings.binaryDescription,
+      showBinaryPath: providerSettings.showBinaryPath !== false,
       homePathKey: providerSettings.homePathKey,
       homePlaceholder: providerSettings.homePlaceholder,
       homeDescription: providerSettings.homeDescription,
-      binaryPathValue: providerConfig.binaryPath,
+      binaryPathValue: "binaryPath" in providerConfig ? providerConfig.binaryPath : "",
       isDirty: !Equal.equals(providerConfig, defaultProviderConfig),
       liveProvider,
       models,
@@ -809,6 +1002,47 @@ export function GeneralSettingsPanel() {
               }
               aria-label="Stream assistant messages"
             />
+          }
+        />
+
+        <SettingsRow
+          title="Assistant harness"
+          description="Choose whether chat sessions prefer the native provider runtime or the CoahCode runtime. CoahCode falls back to the native runtime when upstream auth is unavailable."
+          resetAction={
+            settings.assistantHarnessMode !== DEFAULT_UNIFIED_SETTINGS.assistantHarnessMode ? (
+              <SettingResetButton
+                label="assistant harness"
+                onClick={() =>
+                  updateSettings({
+                    assistantHarnessMode: DEFAULT_UNIFIED_SETTINGS.assistantHarnessMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.assistantHarnessMode}
+              onValueChange={(value) => {
+                if (value === "native" || value === "coahcode") {
+                  updateSettings({ assistantHarnessMode: value as AssistantHarnessMode });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-44" aria-label="Assistant harness mode">
+                <SelectValue>
+                  {settings.assistantHarnessMode === "coahcode" ? "CoahCode" : "Native"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="coahcode">
+                  CoahCode
+                </SelectItem>
+                <SelectItem hideIndicator value="native">
+                  Native
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
 
@@ -1113,35 +1347,41 @@ export function GeneralSettingsPanel() {
                 <CollapsibleContent>
                   <div className="space-y-0">
                     <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                      <label
-                        htmlFor={`provider-install-${providerCard.provider}-binary-path`}
-                        className="block"
-                      >
-                        <span className="text-xs font-medium text-foreground">
-                          {providerDisplayName} binary path
-                        </span>
-                        <Input
-                          id={`provider-install-${providerCard.provider}-binary-path`}
-                          className="mt-1.5"
-                          value={providerCard.binaryPathValue}
-                          onChange={(event) =>
-                            updateSettings({
-                              providers: {
-                                ...settings.providers,
-                                [providerCard.provider]: {
-                                  ...settings.providers[providerCard.provider],
-                                  binaryPath: event.target.value,
+                      {providerCard.showBinaryPath ? (
+                        <label
+                          htmlFor={`provider-install-${providerCard.provider}-binary-path`}
+                          className="block"
+                        >
+                          <span className="text-xs font-medium text-foreground">
+                            {providerDisplayName} binary path
+                          </span>
+                          <Input
+                            id={`provider-install-${providerCard.provider}-binary-path`}
+                            className="mt-1.5"
+                            value={providerCard.binaryPathValue}
+                            onChange={(event) =>
+                              updateSettings({
+                                providers: {
+                                  ...settings.providers,
+                                  [providerCard.provider]: {
+                                    ...settings.providers[providerCard.provider],
+                                    binaryPath: event.target.value,
+                                  },
                                 },
-                              },
-                            })
-                          }
-                          placeholder={providerCard.binaryPlaceholder}
-                          spellCheck={false}
-                        />
-                        <span className="mt-1 block text-xs text-muted-foreground">
+                              })
+                            }
+                            placeholder={providerCard.binaryPlaceholder}
+                            spellCheck={false}
+                          />
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {providerCard.binaryDescription}
+                          </span>
+                        </label>
+                      ) : (
+                        <div className="text-xs text-muted-foreground">
                           {providerCard.binaryDescription}
-                        </span>
-                      </label>
+                        </div>
+                      )}
                     </div>
 
                     {providerCard.homePathKey ? (
@@ -1178,6 +1418,319 @@ export function GeneralSettingsPanel() {
                           ) : null}
                         </label>
                       </div>
+                    ) : null}
+
+                    {providerCard.provider === "harness" ? (
+                      <>
+                        <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-xs font-medium text-foreground">
+                                Built-in LSP servers
+                              </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                TypeScript, Python, Go, Rust, and CSS auto-start on demand.
+                              </div>
+                            </div>
+                            <Switch
+                              checked={settings.providers.harness.enableBuiltinLsp}
+                              onCheckedChange={(checked) =>
+                                updateSettings({
+                                  providers: {
+                                    ...settings.providers,
+                                    harness: {
+                                      ...settings.providers.harness,
+                                      enableBuiltinLsp: Boolean(checked),
+                                    },
+                                  },
+                                })
+                              }
+                              aria-label="Enable built-in harness LSP servers"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                          <div className="text-xs font-medium text-foreground">
+                            Workspace skills
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Skills are auto-discovered from Claude, Cursor, Codex, and OpenCode
+                            folders, plus any extra `skills.paths` declared in `opencode.json` or
+                            `opencode.jsonc`.
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {(providerCard.liveProvider?.skills ?? []).length === 0 ? (
+                              <p className="text-xs text-muted-foreground">No skills discovered.</p>
+                            ) : (
+                              (providerCard.liveProvider?.skills ?? []).map((skill) => (
+                                <div
+                                  key={skill.path}
+                                  className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2"
+                                >
+                                  <div className="text-xs font-medium text-foreground">
+                                    {skill.displayName}
+                                  </div>
+                                  {skill.shortDescription ? (
+                                    <div className="mt-1 text-xs text-muted-foreground">
+                                      {skill.shortDescription}
+                                    </div>
+                                  ) : null}
+                                  <code className="mt-1 block break-all text-[11px] text-muted-foreground/80">
+                                    {skill.path}
+                                  </code>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                          <div className="text-xs font-medium text-foreground">MCP servers</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Add local stdio servers or remote MCP endpoints for the harness.
+                            OpenCode MCP config is imported automatically, and entries here win on
+                            name conflicts.
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {settings.providers.harness.mcpServers.length === 0 ? (
+                              <p className="text-xs text-muted-foreground">
+                                No MCP servers configured.
+                              </p>
+                            ) : (
+                              settings.providers.harness.mcpServers.map((server) => (
+                                <div
+                                  key={server.name}
+                                  className="flex items-start gap-3 rounded-lg border border-border/70 bg-muted/25 px-3 py-2"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-medium text-foreground">
+                                        {server.name}
+                                      </span>
+                                      <span className="rounded bg-background px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                                        {server.type}
+                                      </span>
+                                    </div>
+                                    <code className="mt-1 block break-all text-[11px] text-muted-foreground/80">
+                                      {server.type === "local"
+                                        ? (server.command ?? []).join(" ")
+                                        : (server.url ?? "")}
+                                    </code>
+                                  </div>
+                                  <Switch
+                                    checked={server.enabled}
+                                    onCheckedChange={(checked) =>
+                                      toggleHarnessMcpServer(server.name, Boolean(checked))
+                                    }
+                                    aria-label={`Toggle ${server.name}`}
+                                  />
+                                  <Button
+                                    size="icon-xs"
+                                    variant="ghost"
+                                    className="size-6"
+                                    onClick={() => removeHarnessMcpServer(server.name)}
+                                  >
+                                    <XIcon className="size-3.5" />
+                                  </Button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          <div className="mt-3 grid gap-2 sm:grid-cols-[140px_minmax(0,1fr)_auto]">
+                            <Input
+                              value={newHarnessMcp.name}
+                              onChange={(event) => {
+                                setNewHarnessMcp((current) => ({
+                                  ...current,
+                                  name: event.target.value,
+                                }));
+                                if (newHarnessMcpError) {
+                                  setNewHarnessMcpError(null);
+                                }
+                              }}
+                              placeholder="filesystem"
+                              spellCheck={false}
+                            />
+                            <Input
+                              value={newHarnessMcp.target}
+                              onChange={(event) => {
+                                setNewHarnessMcp((current) => ({
+                                  ...current,
+                                  target: event.target.value,
+                                }));
+                                if (newHarnessMcpError) {
+                                  setNewHarnessMcpError(null);
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  addHarnessMcpServer();
+                                }
+                              }}
+                              placeholder={
+                                newHarnessMcp.type === "local"
+                                  ? "npx @modelcontextprotocol/server-filesystem ~/Projects"
+                                  : "https://example.com/mcp"
+                              }
+                              spellCheck={false}
+                            />
+                            <Select
+                              value={newHarnessMcp.type}
+                              onValueChange={(value) => {
+                                if (value === "local" || value === "remote") {
+                                  setNewHarnessMcp((current) => ({
+                                    ...current,
+                                    type: value,
+                                  }));
+                                  setNewHarnessMcpError(null);
+                                }
+                              }}
+                            >
+                              <SelectTrigger className="w-full sm:w-28">
+                                <SelectValue>{newHarnessMcp.type}</SelectValue>
+                              </SelectTrigger>
+                              <SelectPopup align="end" alignItemWithTrigger={false}>
+                                <SelectItem hideIndicator value="local">
+                                  local
+                                </SelectItem>
+                                <SelectItem hideIndicator value="remote">
+                                  remote
+                                </SelectItem>
+                              </SelectPopup>
+                            </Select>
+                          </div>
+                          <div className="mt-2 flex justify-end">
+                            <Button size="sm" variant="outline" onClick={addHarnessMcpServer}>
+                              <PlusIcon className="size-3.5" />
+                              Add MCP server
+                            </Button>
+                          </div>
+                          {newHarnessMcpError ? (
+                            <p className="mt-2 text-xs text-destructive">{newHarnessMcpError}</p>
+                          ) : null}
+                        </div>
+
+                        <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                          <div className="text-xs font-medium text-foreground">
+                            Custom LSP servers
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Add language servers beyond the built-in set. Use comma-separated file
+                            extensions and root markers.
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {settings.providers.harness.lspServers.length === 0 ? (
+                              <p className="text-xs text-muted-foreground">
+                                No custom LSP servers configured.
+                              </p>
+                            ) : (
+                              settings.providers.harness.lspServers.map((server) => (
+                                <div
+                                  key={server.id}
+                                  className="flex items-start gap-3 rounded-lg border border-border/70 bg-muted/25 px-3 py-2"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-xs font-medium text-foreground">
+                                      {server.id}
+                                    </div>
+                                    <div className="mt-1 text-[11px] text-muted-foreground">
+                                      Extensions: {server.extensions.join(", ")}
+                                    </div>
+                                    <code className="mt-1 block break-all text-[11px] text-muted-foreground/80">
+                                      {server.command.join(" ")}
+                                    </code>
+                                  </div>
+                                  <Button
+                                    size="icon-xs"
+                                    variant="ghost"
+                                    className="size-6"
+                                    onClick={() => removeHarnessLspServer(server.id)}
+                                  >
+                                    <XIcon className="size-3.5" />
+                                  </Button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          <div className="mt-3 grid gap-2">
+                            <Input
+                              value={newHarnessLsp.id}
+                              onChange={(event) => {
+                                setNewHarnessLsp((current) => ({
+                                  ...current,
+                                  id: event.target.value,
+                                }));
+                                if (newHarnessLspError) {
+                                  setNewHarnessLspError(null);
+                                }
+                              }}
+                              placeholder="typescript-eslint"
+                              spellCheck={false}
+                            />
+                            <Input
+                              value={newHarnessLsp.extensions}
+                              onChange={(event) => {
+                                setNewHarnessLsp((current) => ({
+                                  ...current,
+                                  extensions: event.target.value,
+                                }));
+                                if (newHarnessLspError) {
+                                  setNewHarnessLspError(null);
+                                }
+                              }}
+                              placeholder=".ts,.tsx"
+                              spellCheck={false}
+                            />
+                            <Input
+                              value={newHarnessLsp.command}
+                              onChange={(event) => {
+                                setNewHarnessLsp((current) => ({
+                                  ...current,
+                                  command: event.target.value,
+                                }));
+                                if (newHarnessLspError) {
+                                  setNewHarnessLspError(null);
+                                }
+                              }}
+                              placeholder="typescript-language-server --stdio"
+                              spellCheck={false}
+                            />
+                            <Input
+                              value={newHarnessLsp.rootMarkers}
+                              onChange={(event) => {
+                                setNewHarnessLsp((current) => ({
+                                  ...current,
+                                  rootMarkers: event.target.value,
+                                }));
+                                if (newHarnessLspError) {
+                                  setNewHarnessLspError(null);
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  addHarnessLspServer();
+                                }
+                              }}
+                              placeholder="package.json,tsconfig.json"
+                              spellCheck={false}
+                            />
+                          </div>
+                          <div className="mt-2 flex justify-end">
+                            <Button size="sm" variant="outline" onClick={addHarnessLspServer}>
+                              <PlusIcon className="size-3.5" />
+                              Add LSP server
+                            </Button>
+                          </div>
+                          {newHarnessLspError ? (
+                            <p className="mt-2 text-xs text-destructive">{newHarnessLspError}</p>
+                          ) : null}
+                        </div>
+                      </>
                     ) : null}
 
                     <div className="border-t border-border/60 px-4 py-3 sm:px-5">
@@ -1353,6 +1906,12 @@ export function GeneralSettingsPanel() {
         </div>
       </SettingsSection>
 
+      <SettingsSection title="Workspaces">
+        <div className="px-1">
+          <WorkspacePicker />
+        </div>
+      </SettingsSection>
+
       <SettingsSection title="About">
         {isElectron ? (
           <AboutVersionSection />
@@ -1461,7 +2020,13 @@ export function ArchivedThreadsPanel() {
           <SettingsSection
             key={project.id}
             title={project.name}
-            icon={<ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />}
+            icon={
+              <ProjectFavicon
+                environmentId={project.environmentId}
+                cwd={project.cwd}
+                projectIcon={project.icon}
+              />
+            }
           >
             {projectThreads.map((thread) => (
               <div

@@ -22,9 +22,7 @@ export function SteeringIndicator({
           type="button"
           onClick={onToggleBehavior}
           className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
-            behavior === "steer"
-              ? "bg-primary/15 text-primary"
-              : "bg-amber-500/15 text-amber-500"
+            behavior === "steer" ? "bg-primary/15 text-primary" : "bg-amber-500/15 text-amber-500"
           }`}
           title={`Send key: ${behavior === "steer" ? "Steer (guide active run)" : "Queue (send after)"}`}
         >
