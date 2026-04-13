@@ -16,29 +16,66 @@ import type {
 	ConversationMessage,
 	ToolCall,
 	ToolResult,
+	ToolDefinition,
 } from '../types.js';
 import { executeToolsParallel, getToolDefinitions } from '../tools/index.js';
 import { streamAnthropic } from '../providers/anthropic.js';
 import { streamOpenAI } from '../providers/openai.js';
 import { buildSystemPrompt } from './prompt.js';
+import { McpManager, type McpServerConfig } from '../mcp/client.js';
+import { LspManager } from '../lsp/client.js';
+import { discoverSkills, loadInstructions, getSkillToolDefinition, getSkillContent, type Skill } from '../skills/loader.js';
 
 export interface AgentLoopOptions {
 	readonly config: AgentConfig;
 	readonly userMessage: string;
 	readonly conversationHistory?: readonly ConversationMessage[];
 	readonly signal?: AbortSignal;
+	readonly mcpConfigs?: readonly McpServerConfig[];
+	readonly lspManager?: LspManager;
 }
 
 export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<AgentEvent> {
-	const { config, userMessage, conversationHistory = [], signal } = options;
+	const { config, userMessage, conversationHistory = [], signal, mcpConfigs, lspManager } = options;
 	const maxTurns = config.maxTurns ?? 50;
-	const tools = getToolDefinitions();
-	const systemPrompt = config.systemPrompt ?? buildSystemPrompt(config);
+
+	// ─── Discover skills + instructions ────────────────────────────────
+	const [skills, instructions] = await Promise.all([
+		discoverSkills(config.workspaceRoot),
+		loadInstructions(config.workspaceRoot),
+	]);
+
+	// ─── Connect MCP servers ───────────────────────────────────────────
+	const mcpManager = new McpManager();
+	if (mcpConfigs && mcpConfigs.length > 0) {
+		await mcpManager.connectAll(mcpConfigs);
+	}
+
+	// ─── Build tools list (built-in + MCP + LSP + skills) ──────────────
+	const allTools: ToolDefinition[] = [
+		...(config.mode === 'plan' ? [] : getToolDefinitions()),
+		...mcpManager.getToolDefinitions(),
+	];
+
+	// Add LSP tool if manager provided
+	if (lspManager) {
+		allTools.push(lspManager.getToolDefinition());
+	}
+
+	// Add skill tool if skills found
+	const skillTool = getSkillToolDefinition(skills);
+	if (skillTool) {
+		allTools.push(skillTool);
+	}
+
+	// ─── Build system prompt with instructions ─────────────────────────
+	let systemPrompt = config.systemPrompt ?? buildSystemPrompt(config);
+	if (instructions.length > 0) {
+		systemPrompt += "\n\n<instructions>\n" + instructions.join("\n\n---\n\n") + "\n</instructions>";
+	}
 
 	// Build initial conversation
 	const messages: ConversationMessage[] = [...conversationHistory];
-
-	// Add user message
 	messages.push({ role: 'user', content: userMessage });
 
 	let turnNumber = 0;
@@ -61,7 +98,7 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 				model: config.model,
 				apiKey: config.apiKey,
 				messages,
-				tools: config.mode === 'plan' ? [] : [...tools],
+				tools: allTools,
 				systemPrompt,
 				thinkingEnabled: true,
 				signal,
@@ -73,7 +110,7 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 					? 'https://openrouter.ai/api/v1'
 					: 'https://api.openai.com/v1',
 				messages,
-				tools: config.mode === 'plan' ? [] : [...tools],
+				tools: allTools,
 				systemPrompt,
 				signal,
 			});
@@ -126,7 +163,64 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 		// ─── Execute tool calls in PARALLEL ────────────────────────────────
 		yield { type: 'commentary', text: `Executing ${toolCalls.length} tool${toolCalls.length > 1 ? 's' : ''} in parallel...` };
 
-		const results = await executeToolsParallel(toolCalls, config.workspaceRoot);
+		// Route each tool call to the right executor
+		const results: ToolResult[] = await Promise.all(toolCalls.map(async (call): Promise<ToolResult> => {
+			try {
+				// MCP tools (prefixed with mcp_)
+				if (call.name.startsWith('mcp_')) {
+					const parts = call.name.split('_');
+					const serverName = parts[1];
+					const toolName = parts.slice(2).join('_');
+					const content = await mcpManager.callTool(serverName, toolName, call.arguments);
+					return { tool_call_id: call.id, content };
+				}
+
+				// LSP tool
+				if (call.name === 'LSP' && lspManager) {
+					const op = call.arguments.operation as string;
+					const filePath = call.arguments.filePath as string;
+					const line = call.arguments.line as number;
+					const char = call.arguments.character as number;
+
+					let content: string;
+					switch (op) {
+						case 'getDiagnostics': {
+							const diags = await lspManager.getDiagnostics(filePath);
+							content = diags.length === 0
+								? 'No diagnostics found.'
+								: diags.map(d => `${d.severity.toUpperCase()} [${d.line}:${d.character}] ${d.message}${d.source ? ` (${d.source})` : ''}`).join('\n');
+							break;
+						}
+						case 'goToDefinition':
+							content = await lspManager.goToDefinition(filePath, line, char);
+							break;
+						case 'hover':
+							content = await lspManager.hover(filePath, line, char);
+							break;
+						default:
+							content = `Unknown LSP operation: ${op}`;
+					}
+					return { tool_call_id: call.id, content };
+				}
+
+				// Skill tool
+				if (call.name === 'Skill') {
+					const skillName = call.arguments.name as string;
+					const content = getSkillContent(skills, skillName);
+					return { tool_call_id: call.id, content };
+				}
+
+				// Built-in tools
+				const { executeTool } = await import('../tools/index.js');
+				return executeTool(call, config.workspaceRoot);
+			} catch (error) {
+				return {
+					tool_call_id: call.id,
+					content: `Tool error: ${error instanceof Error ? error.message : String(error)}`,
+					is_error: true,
+				};
+			}
+		}));
 
 		// Track edited files for auto-verification
 		for (const tc of toolCalls) {
@@ -195,6 +289,9 @@ export async function* runAgentLoop(options: AgentLoopOptions): AsyncGenerator<A
 			}
 		}
 	}
+
+	// Cleanup
+	mcpManager.closeAll();
 
 	yield { type: 'error', error: `Max turns (${maxTurns}) reached` };
 }
