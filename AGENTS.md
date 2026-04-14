@@ -74,3 +74,11 @@ Requires Node.js 24.13.1 and Bun 1.3.9 (pinned in `.mise.toml`). The VM update s
 ### Provider CLIs not available
 
 Codex CLI and Claude CLI are not installed in the Cloud Agent VM. The app starts and is fully interactive without them — provider sessions just can't be created. This is expected and does not block UI development or non-provider tests.
+
+### Desktop (Electron) dev mode
+
+`bun dev:desktop` does not work in the Cloud Agent VM for two reasons:
+1. `tsdown --watch` hangs during the desktop bundle build step, preventing Electron from launching via the standard orchestration.
+2. `/dev/shm` is only 64MB in the VM, causing Chromium's `ERR_INSUFFICIENT_RESOURCES` when Electron loads the Vite dev server. The `--disable-dev-shm-usage` flag fixes the resource error, but the auth bootstrap still fails because the desktop IPC channel isn't wired without the full `dev:desktop` orchestration.
+
+Use `bun dev` (web mode) for all UI development. The web mode is functionally equivalent — the same React app runs in both modes.
