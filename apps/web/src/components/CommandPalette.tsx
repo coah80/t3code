@@ -96,7 +96,7 @@ import {
 } from "./settings/ThemePreviewCircles";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
-import { filesystemEnvironment } from "../state/filesystem";
+import { filesystemEnvironment, waitForDrives } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
@@ -1574,6 +1574,25 @@ function OpenCommandPaletteDialog(props: {
     [buildAddProjectDriveGroups, pushPaletteView],
   );
 
+  const startAddProjectLocalFolder = useCallback(
+    async (environmentId: EnvironmentId): Promise<void> => {
+      let driveList: FilesystemDriveList | null = null;
+      await browseNavigation.run(
+        async () => {
+          driveList = await waitForDrives(environmentId);
+        },
+        () => {
+          if (driveList !== null && driveList.drives.length <= 1) {
+            void startAddProjectBrowse(environmentId);
+            return;
+          }
+          startAddProjectDriveSelection(environmentId);
+        },
+      );
+    },
+    [browseNavigation, startAddProjectBrowse, startAddProjectDriveSelection],
+  );
+
   const buildAddProjectSourceGroups = useCallback(
     (
       environmentId: EnvironmentId,
@@ -1589,7 +1608,7 @@ function OpenCommandPaletteDialog(props: {
           icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
           keepOpen: true,
           run: async () => {
-            startAddProjectDriveSelection(environmentId);
+            await startAddProjectLocalFolder(environmentId);
           },
         },
       ];
@@ -1665,7 +1684,7 @@ function OpenCommandPaletteDialog(props: {
 
       return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
     },
-    [openSourceControlSettings, startAddProjectClone, startAddProjectDriveSelection],
+    [openSourceControlSettings, startAddProjectClone, startAddProjectLocalFolder],
   );
 
   const startAddProjectSourceSelection = useCallback(
@@ -2190,19 +2209,22 @@ function OpenCommandPaletteDialog(props: {
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const driveSelectionViewValue =
     addProjectEnvironmentId === null ? null : `drives:${addProjectEnvironmentId}`;
+  const isSourceSelectionView =
+    addProjectEnvironmentId !== null &&
+    currentView !== null &&
+    currentView.groups[0]?.value === sourceSelectionViewValue;
   const isDriveSelectionView =
     addProjectEnvironmentId !== null &&
     currentView !== null &&
     currentView.groups[0]?.value === driveSelectionViewValue;
+  // subscribed one step early so "Local folder" already knows whether a drive list is even worth showing
   const drivesQuery = useEnvironmentQuery(
-    isDriveSelectionView && addProjectEnvironmentId !== null
+    (isSourceSelectionView || isDriveSelectionView) && addProjectEnvironmentId !== null
       ? filesystemEnvironment.drives({ environmentId: addProjectEnvironmentId, input: {} })
       : null,
   );
   const activeGroups =
-    addProjectEnvironmentId !== null &&
-    currentView !== null &&
-    currentView.groups[0]?.value === sourceSelectionViewValue
+    isSourceSelectionView && addProjectEnvironmentId !== null
       ? buildAddProjectSourceGroups(
           addProjectEnvironmentId,
           buildAddProjectRemoteSourceReadiness(sourceControlDiscovery.data),

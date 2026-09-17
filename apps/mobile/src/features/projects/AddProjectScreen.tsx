@@ -924,6 +924,9 @@ function DrivePicker(props: {
   );
   const homePath = getAddProjectInitialQuery(props.environment.baseDirectory);
   const drives = drivesState.data?.drives ?? [];
+  if (drives.length <= 1) {
+    return null;
+  }
 
   return (
     <>
@@ -965,11 +968,6 @@ function DrivePicker(props: {
             }
           />
         ))}
-        {drivesState.isPending && drivesState.data === null ? (
-          <View className="items-center py-3">
-            <ActivityIndicator colorClassName="accent-icon-muted" />
-          </View>
-        ) : null}
       </ListSection>
     </>
   );
