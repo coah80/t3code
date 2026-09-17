@@ -18,6 +18,7 @@ import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReferenc
 import {
   canPreloadBrowsePath,
   createBrowseNavigationCoordinator,
+  describeDrive,
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
 } from "@t3tools/client-runtime/state/filesystem";
@@ -31,6 +32,8 @@ import {
   type EnvironmentId,
   type EnvironmentMachineKind,
   type FilesystemBrowseResult,
+  type FilesystemDrive,
+  type FilesystemDriveList,
   type ProjectId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
@@ -47,15 +50,19 @@ import {
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  HardDriveIcon,
+  HouseIcon,
   LinkIcon,
   MessageSquareIcon,
   MonitorIcon,
   MoonIcon,
+  NetworkIcon,
   PaletteIcon,
   SettingsIcon,
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
+  UsbIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -362,6 +369,18 @@ function remoteProjectSourceIcon(source: AddProjectRemoteSource, className: stri
       return <AzureDevOpsIcon className={className} />;
     case "url":
       return <LinkIcon className={className} />;
+  }
+}
+
+function driveIcon(drive: FilesystemDrive, className: string): ReactNode {
+  switch (drive.kind) {
+    case "removable":
+      return <UsbIcon className={className} />;
+    case "network":
+      return <NetworkIcon className={className} />;
+    case "system":
+    case "fixed":
+      return <HardDriveIcon className={className} />;
   }
 }
 
@@ -1438,8 +1457,11 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const startAddProjectBrowse = useCallback(
-    async (environmentId: EnvironmentId): Promise<void> => {
-      const initialQuery = getAddProjectInitialQueryForEnvironment(environmentId);
+    async (environmentId: EnvironmentId, startPath?: string): Promise<void> => {
+      const initialQuery =
+        startPath === undefined
+          ? getAddProjectInitialQueryForEnvironment(environmentId)
+          : ensureBrowseDirectoryPath(startPath);
       const initialBrowsePath = getBrowseDirectoryPath(initialQuery);
       const browseCwd = getBrowseCwdForEnvironment(environmentId);
       const view: CommandPaletteView = {
@@ -1487,6 +1509,71 @@ function OpenCommandPaletteDialog(props: {
     void navigate({ to: "/settings/source-control" });
   }, [navigate, setOpen]);
 
+  const buildAddProjectDriveGroups = useCallback(
+    (
+      environmentId: EnvironmentId,
+      driveList: FilesystemDriveList | null,
+    ): CommandPaletteView["groups"] => {
+      const homeQuery = getAddProjectInitialQueryForEnvironment(environmentId);
+      const locationItems: Array<CommandPaletteActionItem> = [
+        {
+          kind: "action",
+          value: `action:add-project:${environmentId}:drive:home`,
+          searchTerms: ["home", "~", homeQuery],
+          title: "Home",
+          description: homeQuery,
+          icon: <HouseIcon className={ITEM_ICON_CLASS} />,
+          keepOpen: true,
+          run: async () => {
+            await startAddProjectBrowse(environmentId);
+          },
+        },
+      ];
+      const driveItems: Array<CommandPaletteActionItem> =
+        driveList === null
+          ? [
+              {
+                kind: "action",
+                value: `action:add-project:${environmentId}:drive:pending`,
+                searchTerms: [],
+                title: "Looking for drives",
+                disabled: true,
+                icon: <HardDriveIcon className={ITEM_ICON_CLASS} />,
+                run: async () => {},
+              },
+            ]
+          : driveList.drives.map((drive) => ({
+              kind: "action" as const,
+              value: `action:add-project:${environmentId}:drive:${drive.path}`,
+              searchTerms: [drive.label, drive.path, drive.kind, "drive", "volume", "disk"],
+              title: drive.label,
+              description: describeDrive(drive),
+              icon: driveIcon(drive, ITEM_ICON_CLASS),
+              keepOpen: true,
+              run: async () => {
+                await startAddProjectBrowse(environmentId, drive.path);
+              },
+            }));
+      return [
+        { value: `drives:${environmentId}`, label: "Locations", items: locationItems },
+        { value: `drives:${environmentId}:list`, label: "Drives", items: driveItems },
+      ];
+    },
+    [getAddProjectInitialQueryForEnvironment, startAddProjectBrowse],
+  );
+
+  const startAddProjectDriveSelection = useCallback(
+    (environmentId: EnvironmentId): void => {
+      setAddProjectEnvironmentId(environmentId);
+      setAddProjectCloneFlow(null);
+      pushPaletteView({
+        addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
+        groups: buildAddProjectDriveGroups(environmentId, null),
+      });
+    },
+    [buildAddProjectDriveGroups, pushPaletteView],
+  );
+
   const buildAddProjectSourceGroups = useCallback(
     (
       environmentId: EnvironmentId,
@@ -1496,13 +1583,13 @@ function OpenCommandPaletteDialog(props: {
         {
           kind: "action",
           value: `action:add-project:${environmentId}:local`,
-          searchTerms: ["local", "folder", "directory", "browse"],
+          searchTerms: ["local", "folder", "directory", "browse", "drive"],
           title: "Local folder",
           description: "Browse a folder on disk",
           icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
           keepOpen: true,
           run: async () => {
-            await startAddProjectBrowse(environmentId);
+            startAddProjectDriveSelection(environmentId);
           },
         },
       ];
@@ -1578,7 +1665,7 @@ function OpenCommandPaletteDialog(props: {
 
       return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
     },
-    [openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
+    [openSourceControlSettings, startAddProjectClone, startAddProjectDriveSelection],
   );
 
   const startAddProjectSourceSelection = useCallback(
@@ -2101,6 +2188,17 @@ function OpenCommandPaletteDialog(props: {
   }));
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
+  const driveSelectionViewValue =
+    addProjectEnvironmentId === null ? null : `drives:${addProjectEnvironmentId}`;
+  const isDriveSelectionView =
+    addProjectEnvironmentId !== null &&
+    currentView !== null &&
+    currentView.groups[0]?.value === driveSelectionViewValue;
+  const drivesQuery = useEnvironmentQuery(
+    isDriveSelectionView && addProjectEnvironmentId !== null
+      ? filesystemEnvironment.drives({ environmentId: addProjectEnvironmentId, input: {} })
+      : null,
+  );
   const activeGroups =
     addProjectEnvironmentId !== null &&
     currentView !== null &&
@@ -2109,11 +2207,13 @@ function OpenCommandPaletteDialog(props: {
           addProjectEnvironmentId,
           buildAddProjectRemoteSourceReadiness(sourceControlDiscovery.data),
         )
-      : currentView?.groups[0]?.value === "themes"
-        ? changeThemeItem.groups
-        : currentView?.groups[0]?.value === "appearance"
-          ? changeAppearanceItem.groups
-          : (currentView?.groups ?? rootGroups);
+      : isDriveSelectionView
+        ? buildAddProjectDriveGroups(addProjectEnvironmentId, drivesQuery.data)
+        : currentView?.groups[0]?.value === "themes"
+          ? changeThemeItem.groups
+          : currentView?.groups[0]?.value === "appearance"
+            ? changeAppearanceItem.groups
+            : (currentView?.groups ?? rootGroups);
 
   const filteredGroups = filterCommandPaletteGroups({
     activeGroups,

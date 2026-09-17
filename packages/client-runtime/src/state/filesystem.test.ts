@@ -3,7 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canPreloadBrowsePath,
   createBrowseNavigationCoordinator,
+  describeDrive,
   filterFilesystemBrowseEntries,
+  formatDriveBytes,
   getFilesystemBrowsePath,
 } from "./filesystem.ts";
 
@@ -66,5 +68,31 @@ describe("browse navigation", () => {
     expect(canPreloadBrowsePath("offline")).toBe(false);
     expect(canPreloadBrowsePath("reconnecting")).toBe(false);
     expect(canPreloadBrowsePath(null)).toBe(false);
+  });
+
+  it("describes drives with free space when known", () => {
+    expect(formatDriveBytes(0)).toBe("0 B");
+    expect(formatDriveBytes(512)).toBe("512 B");
+    expect(formatDriveBytes(1_500_000)).toBe("1.5 MB");
+    expect(formatDriveBytes(412_000_000_000)).toBe("412 GB");
+    expect(formatDriveBytes(2_000_000_000_000)).toBe("2.0 TB");
+    expect(
+      describeDrive({
+        path: "/Volumes/External",
+        label: "External",
+        kind: "fixed",
+        totalBytes: 2_000_000_000_000,
+        freeBytes: 412_000_000_000,
+      }),
+    ).toBe("412 GB free of 2.0 TB · /Volumes/External");
+    expect(
+      describeDrive({
+        path: "D:\\",
+        label: "Data (D:)",
+        kind: "fixed",
+        totalBytes: null,
+        freeBytes: null,
+      }),
+    ).toBe("D:\\");
   });
 });
