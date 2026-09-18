@@ -178,7 +178,7 @@ it.layer(TestLayer)("WorkspacePathsLive", (it) => {
                   _tag: "NotFound",
                   module: "FileSystem",
                   method: "stat",
-                  pathOrDescriptor: "/mnt/drive2/projects",
+                  pathOrDescriptor: "/mnt/data/projects",
                 }),
               ),
             makeDirectory: () =>
@@ -187,19 +187,19 @@ it.layer(TestLayer)("WorkspacePathsLive", (it) => {
                   _tag: "PermissionDenied",
                   module: "FileSystem",
                   method: "makeDirectory",
-                  pathOrDescriptor: "/mnt/drive2/projects",
+                  pathOrDescriptor: "/mnt/data/projects",
                 }),
               ),
           }),
         );
 
         const error = yield* workspacePaths
-          .normalizeWorkspaceRoot("/mnt/drive2/projects", { createIfMissing: true })
+          .normalizeWorkspaceRoot("/mnt/data/projects", { createIfMissing: true })
           .pipe(Effect.flip);
 
         expect(error).toBeInstanceOf(WorkspacePaths.WorkspaceRootCreateFailedError);
         expect(error.message).toBe(
-          "Failed to create workspace root: /mnt/drive2/projects (permission denied)",
+          "Failed to create workspace root: /mnt/data/projects (permission denied)",
         );
       }),
     );

@@ -97,14 +97,14 @@ describe("browse navigation", () => {
     ).toBe("D:\\");
     expect(
       describeDrive({
-        path: "/mnt/drive2",
-        label: "drive2",
+        path: "/mnt/data",
+        label: "data",
         kind: "fixed",
         totalBytes: 2_000_000_000_000,
         freeBytes: 412_000_000_000,
         writable: false,
       }),
-    ).toBe("412 GB free of 2.0 TB · /mnt/drive2 · not writable");
+    ).toBe("412 GB free of 2.0 TB · /mnt/data · not writable");
   });
 
   it("skips the drive picker only when there is no extra volume", () => {

@@ -37,13 +37,13 @@ describe("parseLinuxMounts", () => {
     const mounts = DriveDiscovery.parseLinuxMounts(
       [
         "/dev/nvme0n1p2 / ext4 rw,relatime 0 0",
-        "/dev/sdb1 /media/cole/My\\040Drive exfat rw 0 0",
+        "/dev/sdb1 /media/user/My\\040Drive exfat rw 0 0",
         "malformed",
       ].join("\n"),
     );
     expect(mounts).toEqual([
       { source: "/dev/nvme0n1p2", mountPoint: "/", fsType: "ext4" },
-      { source: "/dev/sdb1", mountPoint: "/media/cole/My Drive", fsType: "exfat" },
+      { source: "/dev/sdb1", mountPoint: "/media/user/My Drive", fsType: "exfat" },
     ]);
   });
 });
@@ -60,7 +60,7 @@ describe("selectLinuxDriveMounts", () => {
           "/dev/nvme0n1p2 / ext4 rw 0 0",
           "/dev/nvme0n1p1 /boot/efi vfat rw 0 0",
           "/dev/loop3 /snap/core/1234 squashfs ro 0 0",
-          "/dev/sdb1 /media/cole/USB exfat rw 0 0",
+          "/dev/sdb1 /media/user/USB exfat rw 0 0",
           "/dev/sda1 /mnt/data ext4 rw 0 0",
           "nas:/volume1/media /mnt/nas nfs4 rw 0 0",
           "C:\\134 /mnt/c 9p rw 0 0",
@@ -71,7 +71,7 @@ describe("selectLinuxDriveMounts", () => {
     );
     expect(selected.map((mount) => [mount.mountPoint, mount.kind])).toEqual([
       ["/", "system"],
-      ["/media/cole/USB", "fixed"],
+      ["/media/user/USB", "fixed"],
       ["/mnt/data", "fixed"],
       ["/mnt/nas", "network"],
       ["/mnt/c", "fixed"],
@@ -100,13 +100,13 @@ describe("selectLinuxDriveMounts", () => {
         [
           "/dev/mapper/vg-root / ext4 rw 0 0",
           "/dev/mapper/vg-root /home ext4 rw 0 0",
-          "/dev/sda1 /mnt/drive2 ext4 rw 0 0",
-          "/dev/sda1 /mnt/drive3 ext4 rw 0 0",
-          "/dev/sda1 /mnt/storage ext4 rw 0 0",
+          "/dev/sda1 /mnt/data ext4 rw 0 0",
+          "/dev/sda1 /mnt/mirror ext4 rw 0 0",
+          "/dev/sda1 /mnt/archive ext4 rw 0 0",
         ].join("\n"),
       ),
     );
-    expect(selected.map((mount) => mount.mountPoint)).toEqual(["/", "/mnt/drive2"]);
+    expect(selected.map((mount) => mount.mountPoint)).toEqual(["/", "/mnt/data"]);
   });
 
   it("dedupes repeated mount points, keeping the last one", () => {
@@ -130,7 +130,7 @@ describe("linuxDefaultLabel", () => {
     expect(
       DriveDiscovery.linuxDefaultLabel({
         source: "/dev/sdb1",
-        mountPoint: "/media/cole/Backup",
+        mountPoint: "/media/user/Backup",
         fsType: "ext4",
       }),
     ).toBe("Backup");
@@ -144,7 +144,7 @@ describe("parseDarwinMountOutput", () => {
         "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)",
         "devfs on /dev (devfs, local, nobrowse)",
         "/dev/disk4s2 on /Volumes/Time Machine (apfs, local, nodev, nosuid, journaled)",
-        "//cole@nas._smb._tcp.local/share on /Volumes/share (smbfs, nodev, nosuid, mounted by cole)",
+        "//user@nas._smb._tcp.local/share on /Volumes/share (smbfs, nodev, nosuid, mounted by user)",
       ].join("\n"),
     );
     expect(entries).toEqual([
@@ -235,28 +235,28 @@ describe("pickExtraDriveBrowsePath", () => {
   it("keeps a writable mount, otherwise opens the only writable child", () => {
     expect(
       DriveDiscovery.pickExtraDriveBrowsePath({
-        mountPoint: "/mnt/drive2",
+        mountPoint: "/mnt/data",
         kind: "fixed",
         mountWritable: true,
-        writableChildNames: ["gloops"],
+        writableChildNames: ["work"],
       }),
-    ).toEqual({ path: "/mnt/drive2", writable: true });
+    ).toEqual({ path: "/mnt/data", writable: true });
     expect(
       DriveDiscovery.pickExtraDriveBrowsePath({
-        mountPoint: "/mnt/drive2",
+        mountPoint: "/mnt/data",
         kind: "fixed",
         mountWritable: false,
-        writableChildNames: ["gloops"],
+        writableChildNames: ["work"],
       }),
-    ).toEqual({ path: "/mnt/drive2/gloops", writable: true });
+    ).toEqual({ path: "/mnt/data/work", writable: true });
     expect(
       DriveDiscovery.pickExtraDriveBrowsePath({
-        mountPoint: "/mnt/drive2",
+        mountPoint: "/mnt/data",
         kind: "fixed",
         mountWritable: false,
-        writableChildNames: ["gloops", "shared"],
+        writableChildNames: ["work", "shared"],
       }),
-    ).toEqual({ path: "/mnt/drive2", writable: false });
+    ).toEqual({ path: "/mnt/data", writable: false });
     expect(
       DriveDiscovery.pickExtraDriveBrowsePath({
         mountPoint: "/",
