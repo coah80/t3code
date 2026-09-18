@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { constants as FsConstants } from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
@@ -228,6 +229,26 @@ export function sortDriveCandidates<T extends DriveCandidate>(candidates: Readon
   });
 }
 
+const DRIVE_ROOT_SKIP_NAMES = new Set(["lost+found", "$RECYCLE.BIN", "System Volume Information"]);
+
+export function pickExtraDriveBrowsePath(input: {
+  readonly mountPoint: string;
+  readonly kind: FilesystemDriveKind;
+  readonly mountWritable: boolean;
+  readonly writableChildNames: ReadonlyArray<string>;
+}): { readonly path: string; readonly writable: boolean } {
+  if (input.mountWritable) {
+    return { path: input.mountPoint, writable: true };
+  }
+  if (input.kind !== "system" && input.writableChildNames.length === 1) {
+    return {
+      path: NodePath.join(input.mountPoint, input.writableChildNames[0]!),
+      writable: true,
+    };
+  }
+  return { path: input.mountPoint, writable: false };
+}
+
 class DriveProbeError extends Schema.TaggedError<DriveProbeError>()("DriveProbeError", {
   cause: Schema.Defect(),
 }) {}
@@ -400,15 +421,54 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const isPathWritable = Effect.fn("DriveDiscovery.isPathWritable")(function* (path: string) {
+    const result = yield* promiseOrNull(() => NodeFSP.access(path, FsConstants.W_OK));
+    return result !== null;
+  });
+
+  const listWritableChildDirectoryNames = Effect.fn(
+    "DriveDiscovery.listWritableChildDirectoryNames",
+  )(function* (mountPoint: string) {
+    const entries =
+      (yield* promiseOrNull(() => NodeFSP.readdir(mountPoint, { withFileTypes: true }))) ?? [];
+    const names: Array<string> = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      if (entry.name.startsWith(".") || DRIVE_ROOT_SKIP_NAMES.has(entry.name)) continue;
+      const childPath = NodePath.join(mountPoint, entry.name);
+      const stat = yield* promiseOrNull(() => NodeFSP.stat(childPath));
+      if (!stat?.isDirectory()) continue;
+      if (yield* isPathWritable(childPath)) names.push(entry.name);
+    }
+    return names;
+  });
+
   const withSpace = Effect.fn("DriveDiscovery.withSpace")(function* (
     candidates: ReadonlyArray<DriveCandidate>,
   ) {
     return yield* Effect.forEach(
       candidates,
       (candidate) =>
-        readDriveSpace(candidate.path).pipe(
-          Effect.map((space): FilesystemDrive => ({ ...candidate, ...space })),
-        ),
+        Effect.gen(function* () {
+          const space = yield* readDriveSpace(candidate.path);
+          const mountWritable = yield* isPathWritable(candidate.path);
+          const writableChildNames =
+            mountWritable || candidate.kind === "system"
+              ? []
+              : yield* listWritableChildDirectoryNames(candidate.path);
+          const browse = pickExtraDriveBrowsePath({
+            mountPoint: candidate.path,
+            kind: candidate.kind,
+            mountWritable,
+            writableChildNames,
+          });
+          return {
+            ...candidate,
+            ...space,
+            path: browse.path,
+            writable: browse.writable,
+          } satisfies FilesystemDrive;
+        }),
       { concurrency: 8 },
     );
   });

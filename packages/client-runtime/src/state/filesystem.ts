@@ -88,10 +88,14 @@ export function formatDriveBytes(bytes: number): string {
 }
 
 export function describeDrive(drive: FilesystemDrive): string {
-  if (drive.totalBytes === null || drive.freeBytes === null || drive.totalBytes <= 0) {
-    return drive.path;
+  const base =
+    drive.totalBytes === null || drive.freeBytes === null || drive.totalBytes <= 0
+      ? drive.path
+      : `${formatDriveBytes(drive.freeBytes)} free of ${formatDriveBytes(drive.totalBytes)} · ${drive.path}`;
+  if (drive.kind !== "system" && drive.writable === false) {
+    return `${base} · not writable`;
   }
-  return `${formatDriveBytes(drive.freeBytes)} free of ${formatDriveBytes(drive.totalBytes)} · ${drive.path}`;
+  return base;
 }
 
 export function createFilesystemEnvironmentAtoms<R, E>(

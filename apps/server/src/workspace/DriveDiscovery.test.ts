@@ -203,6 +203,43 @@ describe("sortDriveCandidates", () => {
   });
 });
 
+describe("pickExtraDriveBrowsePath", () => {
+  it("keeps a writable mount, otherwise opens the only writable child", () => {
+    expect(
+      DriveDiscovery.pickExtraDriveBrowsePath({
+        mountPoint: "/mnt/drive2",
+        kind: "fixed",
+        mountWritable: true,
+        writableChildNames: ["gloops"],
+      }),
+    ).toEqual({ path: "/mnt/drive2", writable: true });
+    expect(
+      DriveDiscovery.pickExtraDriveBrowsePath({
+        mountPoint: "/mnt/drive2",
+        kind: "fixed",
+        mountWritable: false,
+        writableChildNames: ["gloops"],
+      }),
+    ).toEqual({ path: "/mnt/drive2/gloops", writable: true });
+    expect(
+      DriveDiscovery.pickExtraDriveBrowsePath({
+        mountPoint: "/mnt/drive2",
+        kind: "fixed",
+        mountWritable: false,
+        writableChildNames: ["gloops", "shared"],
+      }),
+    ).toEqual({ path: "/mnt/drive2", writable: false });
+    expect(
+      DriveDiscovery.pickExtraDriveBrowsePath({
+        mountPoint: "/",
+        kind: "system",
+        mountWritable: false,
+        writableChildNames: ["home"],
+      }),
+    ).toEqual({ path: "/", writable: false });
+  });
+});
+
 effectIt.layer(TestDriveDiscoveryLive)("DriveDiscovery.changes", (it) => {
   it.effect(
     "emits the current drive list to a new subscriber, system drive first",

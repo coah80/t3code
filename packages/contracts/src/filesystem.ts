@@ -30,6 +30,7 @@ export const FilesystemDrive = Schema.Struct({
   kind: FilesystemDriveKind,
   totalBytes: Schema.NullOr(Schema.Number),
   freeBytes: Schema.NullOr(Schema.Number),
+  writable: Schema.optional(Schema.Boolean),
 });
 export type FilesystemDrive = typeof FilesystemDrive.Type;
 

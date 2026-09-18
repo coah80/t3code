@@ -94,5 +94,15 @@ describe("browse navigation", () => {
         freeBytes: null,
       }),
     ).toBe("D:\\");
+    expect(
+      describeDrive({
+        path: "/mnt/drive2",
+        label: "drive2",
+        kind: "fixed",
+        totalBytes: 2_000_000_000_000,
+        freeBytes: 412_000_000_000,
+        writable: false,
+      }),
+    ).toBe("412 GB free of 2.0 TB · /mnt/drive2 · not writable");
   });
 });

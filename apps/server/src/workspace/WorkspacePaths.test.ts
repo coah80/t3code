@@ -165,6 +165,44 @@ it.layer(TestLayer)("WorkspacePathsLive", (it) => {
         });
       }),
     );
+
+    it.effect("includes permission denied when creating a missing root fails", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const workspacePaths = yield* WorkspacePaths.make.pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fileSystem,
+            stat: () =>
+              Effect.fail(
+                PlatformError.systemError({
+                  _tag: "NotFound",
+                  module: "FileSystem",
+                  method: "stat",
+                  pathOrDescriptor: "/mnt/drive2/projects",
+                }),
+              ),
+            makeDirectory: () =>
+              Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "makeDirectory",
+                  pathOrDescriptor: "/mnt/drive2/projects",
+                }),
+              ),
+          }),
+        );
+
+        const error = yield* workspacePaths
+          .normalizeWorkspaceRoot("/mnt/drive2/projects", { createIfMissing: true })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspacePaths.WorkspaceRootCreateFailedError);
+        expect(error.message).toBe(
+          "Failed to create workspace root: /mnt/drive2/projects (permission denied)",
+        );
+      }),
+    );
   });
 
   describe("resolveRelativePathWithinRoot", () => {
