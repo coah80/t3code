@@ -87,6 +87,10 @@ export function formatDriveBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${BYTE_UNITS[unit]}`;
 }
 
+export function shouldSkipDrivePicker(drives: ReadonlyArray<FilesystemDrive>): boolean {
+  return drives.length === 0 || (drives.length === 1 && drives[0]?.kind === "system");
+}
+
 export function describeDrive(drive: FilesystemDrive): string {
   const base =
     drive.totalBytes === null || drive.freeBytes === null || drive.totalBytes <= 0

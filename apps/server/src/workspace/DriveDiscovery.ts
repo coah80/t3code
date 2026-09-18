@@ -117,7 +117,7 @@ export function selectLinuxDriveMounts(
     const isBlockDevice = mount.source.startsWith("/dev/");
     const isNetwork = LINUX_NETWORK_FS_TYPES.has(mount.fsType);
     const isWslDrive = LINUX_WSL_FS_TYPES.has(mount.fsType) && mount.mountPoint.startsWith("/mnt/");
-    if (!isBlockDevice && !isNetwork && !isWslDrive) continue;
+    if (mount.mountPoint !== "/" && !isBlockDevice && !isNetwork && !isWslDrive) continue;
     if (
       mount.mountPoint !== "/" &&
       LINUX_EXCLUDED_MOUNT_PREFIXES.some((prefix) => isUnderPrefix(mount.mountPoint, prefix))
@@ -172,6 +172,7 @@ export interface WindowsLogicalDisk {
   readonly deviceId: string;
   readonly volumeName: string | null;
   readonly driveType: number | null;
+  readonly volumeSerialNumber: string | null;
 }
 
 export function parseWindowsLogicalDisks(json: string): ReadonlyArray<WindowsLogicalDisk> {
@@ -193,7 +194,14 @@ export function parseWindowsLogicalDisks(json: string): ReadonlyArray<WindowsLog
         ? record.VolumeName.trim()
         : null;
     const driveType = typeof record.DriveType === "number" ? record.DriveType : null;
-    disks.push({ deviceId: deviceId.toUpperCase(), volumeName, driveType });
+    const serialValue = record.VolumeSerialNumber;
+    const volumeSerialNumber =
+      typeof serialValue === "string" && serialValue.trim().length > 0
+        ? serialValue.trim()
+        : typeof serialValue === "number"
+          ? String(serialValue)
+          : null;
+    disks.push({ deviceId: deviceId.toUpperCase(), volumeName, driveType, volumeSerialNumber });
   }
   return disks;
 }
@@ -219,6 +227,25 @@ export function windowsDriveCandidate(
     label: `${disk?.volumeName ?? fallbackName} (${deviceId})`,
     kind,
   };
+}
+
+export function windowsDriveIdentity(
+  letters: ReadonlyArray<string>,
+  disks: ReadonlyArray<WindowsLogicalDisk>,
+): string {
+  const diskByDeviceId = new Map(disks.map((disk) => [disk.deviceId, disk]));
+  return letters
+    .map((letter) => {
+      const deviceId = `${letter.toUpperCase()}:`;
+      const disk = diskByDeviceId.get(deviceId);
+      return [
+        deviceId,
+        disk?.volumeSerialNumber ?? "",
+        disk?.volumeName ?? "",
+        String(disk?.driveType ?? ""),
+      ].join("\0");
+    })
+    .join("\n");
 }
 
 export function sortDriveCandidates<T extends DriveCandidate>(candidates: ReadonlyArray<T>): T[] {
@@ -401,15 +428,19 @@ const make = Effect.gen(function* () {
     return present.filter((letter): letter is string => letter !== null);
   });
 
-  const enrichWindows = Effect.fn("DriveDiscovery.enrichWindows")(function* (
-    letters: ReadonlyArray<string>,
-  ) {
-    const json = yield* runCommand("powershell.exe", [
+  const readWindowsLogicalDisks = Effect.fn("DriveDiscovery.readWindowsLogicalDisks")(function* () {
+    return yield* runCommand("powershell.exe", [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "Get-CimInstance -ClassName Win32_LogicalDisk | Select-Object DeviceID,VolumeName,DriveType | ConvertTo-Json -Compress",
+      "Get-CimInstance -ClassName Win32_LogicalDisk | Select-Object DeviceID,VolumeName,DriveType,VolumeSerialNumber | ConvertTo-Json -Compress",
     ]);
+  });
+
+  const enrichWindows = Effect.fn("DriveDiscovery.enrichWindows")(function* (
+    letters: ReadonlyArray<string>,
+    json: string | null,
+  ) {
     const diskByDeviceId = new Map(
       parseWindowsLogicalDisks(json ?? "").map((disk) => [disk.deviceId, disk]),
     );
@@ -491,7 +522,11 @@ const make = Effect.gen(function* () {
       }
       case "win32": {
         const letters = yield* scanWindows();
-        return { identity: letters.join("\0"), enrich: enrichWindows(letters) };
+        const json = yield* readWindowsLogicalDisks();
+        return {
+          identity: windowsDriveIdentity(letters, parseWindowsLogicalDisks(json ?? "")),
+          enrich: enrichWindows(letters, json),
+        };
       }
       default: {
         const fallback: ReadonlyArray<DriveCandidate> = [

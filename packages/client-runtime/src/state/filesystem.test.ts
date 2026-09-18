@@ -7,6 +7,7 @@ import {
   filterFilesystemBrowseEntries,
   formatDriveBytes,
   getFilesystemBrowsePath,
+  shouldSkipDrivePicker,
 } from "./filesystem.ts";
 
 describe("filesystem browse model", () => {
@@ -104,5 +105,26 @@ describe("browse navigation", () => {
         writable: false,
       }),
     ).toBe("412 GB free of 2.0 TB · /mnt/drive2 · not writable");
+  });
+
+  it("skips the drive picker only when there is no extra volume", () => {
+    const system = {
+      path: "/",
+      label: "System",
+      kind: "system" as const,
+      totalBytes: null,
+      freeBytes: null,
+    };
+    const extra = {
+      path: "D:\\",
+      label: "Data (D:)",
+      kind: "fixed" as const,
+      totalBytes: null,
+      freeBytes: null,
+    };
+    expect(shouldSkipDrivePicker([])).toBe(true);
+    expect(shouldSkipDrivePicker([system])).toBe(true);
+    expect(shouldSkipDrivePicker([extra])).toBe(false);
+    expect(shouldSkipDrivePicker([system, extra])).toBe(false);
   });
 });

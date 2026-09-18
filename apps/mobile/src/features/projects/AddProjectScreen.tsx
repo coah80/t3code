@@ -30,6 +30,7 @@ import {
   describeDrive,
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
+  shouldSkipDrivePicker,
 } from "@t3tools/client-runtime/state/filesystem";
 import {
   appendBrowsePathSegment,
@@ -912,6 +913,7 @@ function driveSymbolName(drive: FilesystemDrive) {
 
 function DrivePicker(props: {
   readonly environment: EnvironmentOption;
+  readonly disabled?: boolean;
   readonly navigateToBrowsePath: (input: {
     readonly browseDirectoryPath: string;
   }) => Promise<boolean>;
@@ -924,7 +926,7 @@ function DrivePicker(props: {
   );
   const homePath = getAddProjectInitialQuery(props.environment.baseDirectory);
   const drives = drivesState.data?.drives ?? [];
-  if (drives.length <= 1) {
+  if (shouldSkipDrivePicker(drives)) {
     return null;
   }
 
@@ -945,7 +947,11 @@ function DrivePicker(props: {
           }
           isFirst
           right={null}
-          onPress={() => void props.navigateToBrowsePath({ browseDirectoryPath: homePath })}
+          disabled={props.disabled}
+          onPress={() => {
+            if (props.disabled) return;
+            void props.navigateToBrowsePath({ browseDirectoryPath: homePath });
+          }}
         />
         {drives.map((drive) => (
           <ListRow
@@ -961,11 +967,13 @@ function DrivePicker(props: {
               />
             }
             right={null}
-            onPress={() =>
+            disabled={props.disabled}
+            onPress={() => {
+              if (props.disabled) return;
               void props.navigateToBrowsePath({
                 browseDirectoryPath: ensureBrowseDirectoryPath(drive.path),
-              })
-            }
+              });
+            }}
           />
         ))}
       </ListSection>
@@ -1018,7 +1026,11 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
             onPress={() => void submitPath()}
             loading={isSubmitting}
           />
-          <DrivePicker environment={environment} navigateToBrowsePath={navigateToBrowsePath} />
+          <DrivePicker
+            environment={environment}
+            disabled={isSubmitting}
+            navigateToBrowsePath={navigateToBrowsePath}
+          />
           <FolderBrowser
             environment={environment}
             navigateToBrowsePath={navigateToBrowsePath}

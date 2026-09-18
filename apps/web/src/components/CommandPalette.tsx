@@ -21,6 +21,7 @@ import {
   describeDrive,
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
+  shouldSkipDrivePicker,
 } from "@t3tools/client-runtime/state/filesystem";
 import {
   isAtomCommandInterrupted,
@@ -1582,7 +1583,7 @@ function OpenCommandPaletteDialog(props: {
           driveList = await waitForDrives(environmentId);
         },
         () => {
-          if (driveList !== null && driveList.drives.length <= 1) {
+          if (driveList !== null && shouldSkipDrivePicker(driveList.drives)) {
             void startAddProjectBrowse(environmentId);
             return;
           }

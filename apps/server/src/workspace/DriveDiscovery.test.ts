@@ -78,6 +78,22 @@ describe("selectLinuxDriveMounts", () => {
     ]);
   });
 
+  it("keeps overlay root as the system drive in containers", () => {
+    const selected = DriveDiscovery.selectLinuxDriveMounts(
+      DriveDiscovery.parseLinuxMounts(
+        [
+          "overlay / overlay rw 0 0",
+          "tmpfs /run tmpfs rw 0 0",
+          "/dev/sdb1 /media/usb exfat rw 0 0",
+        ].join("\n"),
+      ),
+    );
+    expect(selected.map((mount) => [mount.mountPoint, mount.kind])).toEqual([
+      ["/", "system"],
+      ["/media/usb", "fixed"],
+    ]);
+  });
+
   it("shows a block device once even when it is bind-mounted in several places", () => {
     const selected = DriveDiscovery.selectLinuxDriveMounts(
       DriveDiscovery.parseLinuxMounts(
@@ -150,14 +166,14 @@ describe("windows drives", () => {
       DriveDiscovery.parseWindowsLogicalDisks(
         '{"DeviceID":"C:","VolumeName":"Windows","DriveType":3}',
       ),
-    ).toEqual([{ deviceId: "C:", volumeName: "Windows", driveType: 3 }]);
+    ).toEqual([{ deviceId: "C:", volumeName: "Windows", driveType: 3, volumeSerialNumber: null }]);
     expect(
       DriveDiscovery.parseWindowsLogicalDisks(
-        '[{"DeviceID":"c:","VolumeName":"","DriveType":3},{"DeviceID":"E:","VolumeName":"USB","DriveType":2},{"DeviceID":"bogus"}]',
+        '[{"DeviceID":"c:","VolumeName":"","DriveType":3},{"DeviceID":"E:","VolumeName":"USB","DriveType":2,"VolumeSerialNumber":"ABCD1234"},{"DeviceID":"bogus"}]',
       ),
     ).toEqual([
-      { deviceId: "C:", volumeName: null, driveType: 3 },
-      { deviceId: "E:", volumeName: "USB", driveType: 2 },
+      { deviceId: "C:", volumeName: null, driveType: 3, volumeSerialNumber: null },
+      { deviceId: "E:", volumeName: "USB", driveType: 2, volumeSerialNumber: "ABCD1234" },
     ]);
     expect(DriveDiscovery.parseWindowsLogicalDisks("not json")).toEqual([]);
   });
@@ -166,21 +182,21 @@ describe("windows drives", () => {
     expect(
       DriveDiscovery.windowsDriveCandidate(
         "c",
-        { deviceId: "C:", volumeName: null, driveType: 3 },
+        { deviceId: "C:", volumeName: null, driveType: 3, volumeSerialNumber: null },
         "C:",
       ),
     ).toEqual({ path: "C:\\", label: "Local Disk (C:)", kind: "system" });
     expect(
       DriveDiscovery.windowsDriveCandidate(
         "E",
-        { deviceId: "E:", volumeName: "USB", driveType: 2 },
+        { deviceId: "E:", volumeName: "USB", driveType: 2, volumeSerialNumber: null },
         "C:",
       ),
     ).toEqual({ path: "E:\\", label: "USB (E:)", kind: "removable" });
     expect(
       DriveDiscovery.windowsDriveCandidate(
         "Z",
-        { deviceId: "Z:", volumeName: null, driveType: 4 },
+        { deviceId: "Z:", volumeName: null, driveType: 4, volumeSerialNumber: null },
         "C:",
       ),
     ).toEqual({ path: "Z:\\", label: "Network Drive (Z:)", kind: "network" });
@@ -189,6 +205,18 @@ describe("windows drives", () => {
       label: "Local Disk (D:)",
       kind: "fixed",
     });
+  });
+
+  it("changes identity when a volume is remapped to the same letter", () => {
+    const first = DriveDiscovery.windowsDriveIdentity(
+      ["E"],
+      [{ deviceId: "E:", volumeName: "USB", driveType: 2, volumeSerialNumber: "1111" }],
+    );
+    const second = DriveDiscovery.windowsDriveIdentity(
+      ["E"],
+      [{ deviceId: "E:", volumeName: "Backup", driveType: 2, volumeSerialNumber: "2222" }],
+    );
+    expect(first).not.toBe(second);
   });
 });
 
