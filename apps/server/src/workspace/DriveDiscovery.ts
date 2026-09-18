@@ -63,15 +63,21 @@ const LINUX_WSL_FS_TYPES = new Set(["drvfs", "9p"]);
 
 const LINUX_EXCLUDED_FS_TYPES = new Set(["squashfs", "iso9660", "udf", "erofs"]);
 
+// standard system partitions. /home is covered by the Home location so a
+// separate home partition should not double up as a drive
 const LINUX_EXCLUDED_MOUNT_PREFIXES = [
   "/boot",
-  "/snap",
-  "/var/snap",
-  "/var/lib/docker",
-  "/var/lib/containers",
+  "/efi",
+  "/usr",
+  "/var",
+  "/tmp",
+  "/run",
   "/proc",
   "/sys",
   "/dev",
+  "/snap",
+  "/home",
+  "/root",
 ];
 
 const DARWIN_NETWORK_FS_TYPES = new Set(["smbfs", "nfs", "afpfs", "webdav", "cifs", "ftp"]);
@@ -258,22 +264,38 @@ export function sortDriveCandidates<T extends DriveCandidate>(candidates: Readon
 
 const DRIVE_ROOT_SKIP_NAMES = new Set(["lost+found", "$RECYCLE.BIN", "System Volume Information"]);
 
+// root-owned mounts usually hand each user a folder at the top, so land there
+// when the mount itself refuses writes: the user's own folder first, otherwise
+// the single writable folder when there is only one to choose from
 export function pickExtraDriveBrowsePath(input: {
   readonly mountPoint: string;
   readonly kind: FilesystemDriveKind;
   readonly mountWritable: boolean;
   readonly writableChildNames: ReadonlyArray<string>;
+  readonly userName?: string | undefined;
 }): { readonly path: string; readonly writable: boolean } {
   if (input.mountWritable) {
     return { path: input.mountPoint, writable: true };
   }
-  if (input.kind !== "system" && input.writableChildNames.length === 1) {
-    return {
-      path: NodePath.join(input.mountPoint, input.writableChildNames[0]!),
-      writable: true,
-    };
+  if (input.kind === "system") {
+    return { path: input.mountPoint, writable: false };
   }
-  return { path: input.mountPoint, writable: false };
+  const userName = input.userName?.trim();
+  const ownFolder =
+    userName && userName.length > 0
+      ? input.writableChildNames.find((name) => name.toLowerCase() === userName.toLowerCase())
+      : undefined;
+  const target =
+    ownFolder ?? (input.writableChildNames.length === 1 ? input.writableChildNames[0] : undefined);
+  if (target === undefined) {
+    return { path: input.mountPoint, writable: false };
+  }
+  return { path: NodePath.join(input.mountPoint, target), writable: true };
+}
+
+export function hostUserName(env: NodeJS.ProcessEnv): string | undefined {
+  const value = env.USER ?? env.LOGNAME ?? env.USERNAME;
+  return value && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 class DriveProbeError extends Schema.TaggedError<DriveProbeError>()("DriveProbeError", {
@@ -492,6 +514,7 @@ const make = Effect.gen(function* () {
             kind: candidate.kind,
             mountWritable,
             writableChildNames,
+            userName: hostUserName(env),
           });
           return {
             ...candidate,

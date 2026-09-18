@@ -94,6 +94,24 @@ describe("selectLinuxDriveMounts", () => {
     ]);
   });
 
+  it("hides separate system partitions such as home, var and usr", () => {
+    const selected = DriveDiscovery.selectLinuxDriveMounts(
+      DriveDiscovery.parseLinuxMounts(
+        [
+          "/dev/nvme0n1p2 / ext4 rw 0 0",
+          "/dev/nvme0n1p3 /home ext4 rw 0 0",
+          "/dev/nvme0n1p4 /var ext4 rw 0 0",
+          "/dev/nvme0n1p5 /usr ext4 rw 0 0",
+          "/dev/nvme0n1p6 /tmp ext4 rw 0 0",
+          "/dev/nvme0n1p1 /efi vfat rw 0 0",
+          "/dev/sda1 /mnt/data ext4 rw 0 0",
+          "/dev/sdb1 /srv/projects ext4 rw 0 0",
+        ].join("\n"),
+      ),
+    );
+    expect(selected.map((mount) => mount.mountPoint)).toEqual(["/", "/mnt/data", "/srv/projects"]);
+  });
+
   it("shows a block device once even when it is bind-mounted in several places", () => {
     const selected = DriveDiscovery.selectLinuxDriveMounts(
       DriveDiscovery.parseLinuxMounts(
@@ -232,7 +250,7 @@ describe("sortDriveCandidates", () => {
 });
 
 describe("pickExtraDriveBrowsePath", () => {
-  it("keeps a writable mount, otherwise opens the only writable child", () => {
+  it("keeps a writable mount, otherwise opens the user's folder or the only writable child", () => {
     expect(
       DriveDiscovery.pickExtraDriveBrowsePath({
         mountPoint: "/mnt/data",
@@ -254,9 +272,21 @@ describe("pickExtraDriveBrowsePath", () => {
         mountPoint: "/mnt/data",
         kind: "fixed",
         mountWritable: false,
+        writableChildNames: ["shared", "Alice", "work"],
+        userName: "alice",
+      }),
+    ).toEqual({ path: "/mnt/data/Alice", writable: true });
+    expect(
+      DriveDiscovery.pickExtraDriveBrowsePath({
+        mountPoint: "/mnt/data",
+        kind: "fixed",
+        mountWritable: false,
         writableChildNames: ["work", "shared"],
+        userName: "alice",
       }),
     ).toEqual({ path: "/mnt/data", writable: false });
+    expect(DriveDiscovery.hostUserName({ LOGNAME: "alice" })).toBe("alice");
+    expect(DriveDiscovery.hostUserName({ USER: " " })).toBeUndefined();
     expect(
       DriveDiscovery.pickExtraDriveBrowsePath({
         mountPoint: "/",
