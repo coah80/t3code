@@ -224,8 +224,34 @@ describe("windows drives", () => {
       kind: "fixed",
     });
   });
+});
 
-  it("changes identity when a volume is remapped to the same letter", () => {
+describe("drive identity", () => {
+  it("changes when a Darwin volume is remounted at the same path", () => {
+    const first = DriveDiscovery.darwinDriveIdentity([
+      { path: "/Volumes/Backup", device: 16777229 },
+    ]);
+    const second = DriveDiscovery.darwinDriveIdentity([
+      { path: "/Volumes/Backup", device: 16777234 },
+    ]);
+    expect(first).not.toBe(second);
+  });
+
+  it("changes when a Linux mount keeps its path but swaps source or fs type", () => {
+    const first = DriveDiscovery.linuxDriveIdentity([
+      { mountPoint: "/mnt/data", source: "/dev/sdb1", fsType: "ext4" },
+    ]);
+    const swappedSource = DriveDiscovery.linuxDriveIdentity([
+      { mountPoint: "/mnt/data", source: "/dev/sdc1", fsType: "ext4" },
+    ]);
+    const swappedFs = DriveDiscovery.linuxDriveIdentity([
+      { mountPoint: "/mnt/data", source: "/dev/sdb1", fsType: "xfs" },
+    ]);
+    expect(first).not.toBe(swappedSource);
+    expect(first).not.toBe(swappedFs);
+  });
+
+  it("changes identity when a Windows volume is remapped to the same letter", () => {
     const first = DriveDiscovery.windowsDriveIdentity(
       ["E"],
       [{ deviceId: "E:", volumeName: "USB", driveType: 2, volumeSerialNumber: "1111" }],

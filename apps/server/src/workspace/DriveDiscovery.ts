@@ -29,6 +29,7 @@ export class DriveDiscovery extends Context.Service<
 >()("t3/workspace/DriveDiscovery") {}
 
 const POLL_INTERVAL = "2 seconds";
+const PROBE_TIMEOUT = "2 seconds";
 
 export interface DriveCandidate {
   readonly path: string;
@@ -235,6 +236,18 @@ export function windowsDriveCandidate(
   };
 }
 
+export function darwinDriveIdentity(
+  candidates: ReadonlyArray<{ readonly path: string; readonly device: number }>,
+): string {
+  return candidates.map((candidate) => `${candidate.path}\0${candidate.device}`).join("\n");
+}
+
+export function linuxDriveIdentity(
+  mounts: ReadonlyArray<Pick<LinuxMountEntry, "mountPoint" | "source" | "fsType">>,
+): string {
+  return mounts.map((mount) => `${mount.mountPoint}\0${mount.source}\0${mount.fsType}`).join("\n");
+}
+
 export function windowsDriveIdentity(
   letters: ReadonlyArray<string>,
   disks: ReadonlyArray<WindowsLogicalDisk>,
@@ -304,6 +317,7 @@ class DriveProbeError extends Schema.TaggedError<DriveProbeError>()("DriveProbeE
 
 const promiseOrNull = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({ try: run, catch: (cause) => new DriveProbeError({ cause }) }).pipe(
+    Effect.timeout(PROBE_TIMEOUT),
     Effect.orElseSucceed(() => null),
   );
 
@@ -339,7 +353,9 @@ const make = Effect.gen(function* () {
 
   const scanDarwin = Effect.fn("DriveDiscovery.scanDarwin")(function* () {
     const names = (yield* promiseOrNull(() => NodeFSP.readdir("/Volumes"))) ?? [];
-    const candidates: Array<DriveCandidate & { readonly realPath: string }> = [];
+    const candidates: Array<
+      DriveCandidate & { readonly realPath: string; readonly device: number }
+    > = [];
     for (const name of names) {
       if (name.startsWith(".")) continue;
       const volumePath = `/Volumes/${name}`;
@@ -353,10 +369,18 @@ const make = Effect.gen(function* () {
         label: name,
         kind: isRoot ? "system" : "fixed",
         realPath,
+        device: stat.dev,
       });
     }
     if (!candidates.some((candidate) => candidate.path === "/")) {
-      candidates.unshift({ path: "/", label: "Macintosh HD", kind: "system", realPath: "/" });
+      const rootStat = yield* promiseOrNull(() => NodeFSP.stat("/"));
+      candidates.unshift({
+        path: "/",
+        label: "Macintosh HD",
+        kind: "system",
+        realPath: "/",
+        device: rootStat?.dev ?? 0,
+      });
     }
     return sortDriveCandidates(candidates);
   });
@@ -532,14 +556,14 @@ const make = Effect.gen(function* () {
       case "darwin": {
         const candidates = yield* scanDarwin();
         return {
-          identity: candidates.map((candidate) => candidate.path).join("\0"),
+          identity: darwinDriveIdentity(candidates),
           enrich: enrichDarwin(candidates),
         };
       }
       case "linux": {
         const mounts = yield* scanLinux();
         return {
-          identity: mounts.map((mount) => mount.mountPoint).join("\0"),
+          identity: linuxDriveIdentity(mounts),
           enrich: enrichLinux(mounts),
         };
       }

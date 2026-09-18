@@ -1412,11 +1412,13 @@ function OpenCommandPaletteDialog(props: {
   );
   const recentThreadItems = allThreadItems.slice(0, RECENT_THREAD_LIMIT);
 
-  const pushPaletteView = useCallback(
-    (view: CommandPaletteView): void => {
+  const applyPaletteView = useCallback(
+    (view: CommandPaletteView, mode: "push" | "replace"): void => {
       browseNavigation.invalidate();
       setViewStack((previousViews) => [
-        ...previousViews,
+        ...(mode === "replace"
+          ? previousViews.slice(0, Math.max(0, previousViews.length - 1))
+          : previousViews),
         {
           addonIcon: view.addonIcon,
           groups: view.groups,
@@ -1427,6 +1429,13 @@ function OpenCommandPaletteDialog(props: {
       setQuery(view.initialQuery ?? "");
     },
     [browseNavigation],
+  );
+
+  const pushPaletteView = useCallback(
+    (view: CommandPaletteView): void => {
+      applyPaletteView(view, "push");
+    },
+    [applyPaletteView],
   );
 
   function pushView(item: CommandPaletteSubmenuItem): void {
@@ -1458,7 +1467,11 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const startAddProjectBrowse = useCallback(
-    async (environmentId: EnvironmentId, startPath?: string): Promise<void> => {
+    async (
+      environmentId: EnvironmentId,
+      startPath?: string,
+      mode: "push" | "replace" = "push",
+    ): Promise<void> => {
       const initialQuery =
         startPath === undefined
           ? getAddProjectInitialQueryForEnvironment(environmentId)
@@ -1479,16 +1492,16 @@ function OpenCommandPaletteDialog(props: {
         () => {
           setAddProjectEnvironmentId(environmentId);
           setAddProjectCloneFlow(null);
-          pushPaletteView(view);
+          applyPaletteView(view, mode);
         },
       );
     },
     [
+      applyPaletteView,
       browseNavigation,
       getAddProjectInitialQueryForEnvironment,
       getBrowseCwdForEnvironment,
       prefetchBrowsePath,
-      pushPaletteView,
     ],
   );
 
@@ -2224,6 +2237,13 @@ function OpenCommandPaletteDialog(props: {
       ? filesystemEnvironment.drives({ environmentId: addProjectEnvironmentId, input: {} })
       : null,
   );
+  useEffect(() => {
+    if (!isDriveSelectionView || addProjectEnvironmentId === null || drivesQuery.data === null) {
+      return;
+    }
+    if (!shouldSkipDrivePicker(drivesQuery.data.drives)) return;
+    void startAddProjectBrowse(addProjectEnvironmentId, undefined, "replace");
+  }, [addProjectEnvironmentId, drivesQuery.data, isDriveSelectionView, startAddProjectBrowse]);
   const activeGroups =
     isSourceSelectionView && addProjectEnvironmentId !== null
       ? buildAddProjectSourceGroups(
