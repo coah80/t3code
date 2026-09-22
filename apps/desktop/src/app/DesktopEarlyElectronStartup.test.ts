@@ -88,6 +88,57 @@ describe("DesktopEarlyElectronStartup", () => {
     });
   });
 
+  it("selects the configured keyring for gamescope before Electron starts", () => {
+    const options = (input: {
+      kwallet: boolean;
+      gnome: boolean;
+      wallet: boolean;
+      gnomeControl?: string;
+      preference?: string;
+    }) =>
+      resolveEarlyLinuxElectronOptions({
+        env: {
+          XDG_CURRENT_DESKTOP: "gamescope",
+          XDG_DATA_DIRS: "/usr/share",
+          GNOME_KEYRING_CONTROL: input.gnomeControl,
+        },
+        homeDirectory: "/home/user",
+        joinPath,
+        readFileString: (path) => {
+          if (path.endsWith("desktop-settings.json")) {
+            return JSON.stringify({ linuxPasswordStore: input.preference ?? "auto" });
+          }
+          if (path === "/usr/share/dbus-1/services/org.kde.kwalletd6.service" && input.kwallet) {
+            return "[D-BUS Service]\nName=org.kde.kwalletd6\n";
+          }
+          if (
+            path === "/usr/share/dbus-1/services/org.freedesktop.secrets.service" &&
+            input.gnome
+          ) {
+            return "[D-BUS Service]\nName=org.freedesktop.secrets\n";
+          }
+          throw new Error("service not installed");
+        },
+        fileExists: (path) => {
+          assert.equal(path, "/home/user/.local/share/kwalletd/kdewallet.kwl");
+          return input.wallet;
+        },
+      }).passwordStore;
+
+    assert.equal(options({ kwallet: true, gnome: false, wallet: false }), "kwallet6");
+    assert.equal(options({ kwallet: false, gnome: true, wallet: false }), "gnome-libsecret");
+    assert.equal(options({ kwallet: true, gnome: true, wallet: false }), "gnome-libsecret");
+    assert.equal(options({ kwallet: true, gnome: true, wallet: true }), "kwallet6");
+    assert.equal(
+      options({ kwallet: true, gnome: true, wallet: true, gnomeControl: "/run/keyring" }),
+      "gnome-libsecret",
+    );
+    assert.equal(
+      options({ kwallet: true, gnome: false, wallet: true, preference: "gnome-libsecret" }),
+      "gnome-libsecret",
+    );
+  });
+
   it("keeps implicit development state under ~/.t3/dev when T3CODE_HOME is unset", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {
