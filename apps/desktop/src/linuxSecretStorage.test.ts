@@ -69,6 +69,13 @@ describe("linuxSecretStorage", () => {
     ).toBe("kwallet6");
     expect(
       resolveLinuxPasswordStoreSwitch({
+        preference: "auto",
+        env: { XDG_CURRENT_DESKTOP: "gamescope:niri" },
+        gamescopeKwallet6Available: true,
+      }),
+    ).toBe("kwallet6");
+    expect(
+      resolveLinuxPasswordStoreSwitch({
         preference: "gnome-libsecret",
         env: { XDG_CURRENT_DESKTOP: "gamescope" },
         gamescopeKwallet6Available: true,

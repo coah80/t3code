@@ -50,11 +50,15 @@ export function resolveLinuxPasswordStoreSwitch(input: {
     return input.preference;
   }
 
-  if (input.env.XDG_CURRENT_DESKTOP === "gamescope" && input.gamescopeKwallet6Available) {
+  if (isGamescopeDesktop(input.env.XDG_CURRENT_DESKTOP) && input.gamescopeKwallet6Available) {
     return "kwallet6";
   }
 
   return electronSelectsProtectedBackend(input.env) ? null : "gnome-libsecret";
+}
+
+export function isGamescopeDesktop(value: string | undefined): boolean {
+  return splitDesktopNameList(value).some((name) => name.trim() === "gamescope");
 }
 
 // Only an exact XDG_CURRENT_DESKTOP literal proves Electron will protect the session. Chromium can

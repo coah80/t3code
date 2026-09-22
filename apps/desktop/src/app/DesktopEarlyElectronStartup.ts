@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import {
   DEFAULT_LINUX_PASSWORD_STORE,
+  isGamescopeDesktop,
   normalizeLinuxPasswordStorePreference,
   resolveLinuxPasswordStoreSwitch,
   type LinuxPasswordStoreSwitch,
@@ -82,13 +83,17 @@ export function resolveEarlyLinuxPasswordStorePreference(
   }
 }
 
-const resolveDataHome = (input: EarlyDesktopSettingsInput): string =>
-  trimNonEmpty(input.env.XDG_DATA_HOME) ?? input.joinPath(input.homeDirectory, ".local", "share");
+const resolveDataHome = (input: EarlyDesktopSettingsInput): string => {
+  const configured = trimNonEmpty(input.env.XDG_DATA_HOME);
+  return configured?.startsWith("/")
+    ? configured
+    : input.joinPath(input.homeDirectory, ".local", "share");
+};
 
 function hasDbusService(input: EarlyDesktopSettingsInput, name: string): boolean {
   const dataDirs = (
     trimNonEmpty(input.env.XDG_DATA_DIRS)?.split(":") ?? ["/usr/local/share", "/usr/share"]
-  ).filter((directory) => directory.length > 0);
+  ).filter((directory) => directory.startsWith("/"));
   for (const directory of [resolveDataHome(input), ...dataDirs]) {
     try {
       const service = input.readFileString(
@@ -132,7 +137,7 @@ export function resolveEarlyLinuxElectronOptions(
       preference,
       env: input.env,
       gamescopeKwallet6Available:
-        preference === "auto" && input.env.XDG_CURRENT_DESKTOP === "gamescope"
+        preference === "auto" && isGamescopeDesktop(input.env.XDG_CURRENT_DESKTOP)
           ? gamescopeHasKwallet6(input)
           : false,
     }),
