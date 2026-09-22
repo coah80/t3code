@@ -44,9 +44,21 @@ export function normalizeLinuxPasswordStorePreference(
 export function resolveLinuxPasswordStoreSwitch(input: {
   readonly preference: LinuxPasswordStorePreference;
   readonly env: NodeJS.ProcessEnv;
+  readonly osRelease?: string | undefined;
 }): LinuxPasswordStoreSwitch | null {
   if (input.preference !== "auto") {
     return input.preference;
+  }
+
+  // Steam Frame runs gamescope outside Plasma but ships a KWallet 6 session.
+  // The generic unknown-desktop fallback picks libsecret, which has no usable
+  // keyring in that session even though KWallet is available.
+  if (
+    input.env.XDG_CURRENT_DESKTOP === "gamescope" &&
+    /^ID=['"]?steamos['"]?$/m.test(input.osRelease ?? "") &&
+    /^VARIANT_ID=['"]?vr['"]?$/m.test(input.osRelease ?? "")
+  ) {
+    return "kwallet6";
   }
 
   return electronSelectsProtectedBackend(input.env) ? null : "gnome-libsecret";

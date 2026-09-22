@@ -88,6 +88,22 @@ describe("DesktopEarlyElectronStartup", () => {
     });
   });
 
+  it("selects KWallet before Electron starts on a Steam Frame", () => {
+    const options = resolveEarlyLinuxElectronOptions({
+      env: { XDG_CURRENT_DESKTOP: "gamescope" },
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: (path) => {
+        if (path === "/etc/os-release") {
+          return "ID=steamos\nVARIANT_ID=vr\n";
+        }
+        throw new Error("no saved settings");
+      },
+    });
+
+    assert.equal(options.passwordStore, "kwallet6");
+  });
+
   it("keeps implicit development state under ~/.t3/dev when T3CODE_HOME is unset", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {

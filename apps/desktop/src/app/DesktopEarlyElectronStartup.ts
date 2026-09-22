@@ -86,6 +86,14 @@ export function resolveEarlyLinuxElectronOptions(
 ): EarlyLinuxElectronOptions {
   const preference = resolveEarlyLinuxPasswordStorePreference(input);
   const isDevelopment = isDevelopmentEnvironment(input.env);
+  let osRelease: string | undefined;
+  if (preference === "auto" && input.env.XDG_CURRENT_DESKTOP === "gamescope") {
+    try {
+      osRelease = input.readFileString("/etc/os-release");
+    } catch {
+      // The usual unknown-desktop fallback still applies when OS identity is unavailable.
+    }
+  }
   return {
     isDevelopment,
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
@@ -93,6 +101,7 @@ export function resolveEarlyLinuxElectronOptions(
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,
       env: input.env,
+      osRelease,
     }),
   };
 }

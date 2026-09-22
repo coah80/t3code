@@ -55,7 +55,33 @@ describe("linuxSecretStorage", () => {
   it("forces gnome-libsecret for unrecognized Linux desktop sessions", () => {
     expect(autoSwitch({ XDG_CURRENT_DESKTOP: "niri" })).toBe("gnome-libsecret");
     expect(autoSwitch({ XDG_CURRENT_DESKTOP: "Hyprland" })).toBe("gnome-libsecret");
+    expect(autoSwitch({ XDG_CURRENT_DESKTOP: "gamescope" })).toBe("gnome-libsecret");
     expect(autoSwitch({})).toBe("gnome-libsecret");
+  });
+
+  it("uses KWallet 6 for the Steam Frame gamescope session", () => {
+    const osRelease = 'ID=steamos\nVARIANT_ID="vr"\n';
+    expect(
+      resolveLinuxPasswordStoreSwitch({
+        preference: "auto",
+        env: { XDG_CURRENT_DESKTOP: "gamescope" },
+        osRelease,
+      }),
+    ).toBe("kwallet6");
+    expect(
+      resolveLinuxPasswordStoreSwitch({
+        preference: "auto",
+        env: { XDG_CURRENT_DESKTOP: "KDE" },
+        osRelease,
+      }),
+    ).toBeNull();
+    expect(
+      resolveLinuxPasswordStoreSwitch({
+        preference: "auto",
+        env: { XDG_CURRENT_DESKTOP: "gamescope" },
+        osRelease: "ID=steamos\nVARIANT_ID=steamdeck\n",
+      }),
+    ).toBe("gnome-libsecret");
   });
 
   it("forces gnome-libsecret for desktops Electron recognizes but leaves on basic text", () => {
